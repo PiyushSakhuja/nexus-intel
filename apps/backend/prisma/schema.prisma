@@ -1,0 +1,335 @@
+// NEXUS INTEL — Prisma schema
+
+// (Entities, Alerts, Investigations, Evidence, Network Graph, Wallets,
+// Listings, Audit Log) has a matching real table from day one.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+
+
+enum SourceAccess {
+  AUTHORIZED
+  PUBLIC
+  SYNTHETIC
+}
+
+model Source {
+  id       String       @id @default(cuid())
+  name     String       @unique // "Source Alpha", "Blockchain Data", "Demo Stream"
+  type     String       // "Intelligence feed", "Public information", "Blockchain data"
+  access   SourceAccess
+  listings Listing[]
+  evidence EvidenceRecord[]
+}
+
+// ─── Entities & identifiers ─────────────────────────────────────────────────
+// The heart of entity resolution: an Entity is a resolved "person", built
+// from multiple correlated Identifiers, each with its own confidence score.
+
+model Entity {
+  id          String   @id @default(cuid()) // display id e.g. ENT-001 stored separately
+  displayId   String   @unique              // "ENT-001"
+  alias       String
+  risk        Int      @default(0)
+  confidence  Int      @default(0)
+  riskChange  Int      @default(0)
+  firstSeen   DateTime @default(now())
+  lastSeen    DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  identifiers   Identifier[]
+  alertLinks    AlertEntity[]
+  graphNode     GraphNode?
+  investigationLinks InvestigationEntity[]
+  events        RiskEvent[]
+
+  networkId String?
+  network   Network? @relation(fields: [networkId], references: [id])
+}
+
+model Identifier {
+  id         String  @id @default(cuid())
+  type       String  // "Username", "Wallet", "Comm ID", "Email"...
+  value      String
+  confidence Int
+  entityId   String
+  entity     Entity  @relation(fields: [entityId], references: [id], onDelete: Cascade)
+}
+
+// ─── Networks (emerging criminal networks) & risk trajectory ───────────────
+// This backs the early-warning system: a Network's risk is a time series,
+// not a single number, so escalation can be detected.
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Network {
+  id          String    @id @default(cuid())
+  displayId   String    @unique // "N-042"
+  risk        Int       @default(0)
+  change      Int       @default(0)
+  status      RiskLevel @default(LOW)
+  lastActivity DateTime @default(now())
+  createdAt   DateTime  @default(now())
+
+  entities      Entity[]
+  riskPoints    NetworkRiskPoint[]
+  alerts        Alert[]
+  investigations Investigation[]
+}
+
+// One point in a network's risk-over-time trajectory — this is what powers
+// the "Day 1: 32 -> Day 20: 91" early-warning chart, generated from real
+// RiskEvents rather than a hardcoded array.
+model NetworkRiskPoint {
+  id        String   @id @default(cuid())
+  networkId String
+  network   Network  @relation(fields: [networkId], references: [id], onDelete: Cascade)
+  label     String   // "Day 1", or an ISO date
+  score     Int
+  recordedAt DateTime @default(now())
+}
+
+// A single ingested/processed event that fed into a risk recalculation —
+// this is what the "Live Intelligence Feed" panel streams over WebSocket.
+model RiskEvent {
+  id          String   @id @default(cuid())
+  entityId    String?
+  entity      Entity?  @relation(fields: [entityId], references: [id])
+  type        String   // "listing_detected" | "transaction_detected" | "correlation" | "risk_update" | "alert_generated"
+  description String
+  scoreDelta  Int      @default(0)
+  createdAt   DateTime @default(now())
+}
+
+// ─── Alerts ──────────────────────────────────────────────────────────────
+
+enum AlertStatus {
+  NEW
+  REVIEWED
+  RESOLVED
+}
+
+model Alert {
+  id          String      @id @default(cuid())
+  displayId   String      @unique // "ALT-089"
+  severity    Int
+  title       String
+  reason      String
+  status      AlertStatus @default(NEW)
+  createdAt   DateTime    @default(now())
+
+  networkId   String?
+  network     Network?    @relation(fields: [networkId], references: [id])
+  entities    AlertEntity[]
+}
+
+model AlertEntity {
+  alertId  String
+  entityId String
+  alert    Alert  @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  entity   Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@id([alertId, entityId])
+}
+
+// ─── Investigations ─────────────────────────────────────────────────────────
+
+enum InvestigationStatus {
+  UNDER_INVESTIGATION
+  UNDER_REVIEW
+  MONITORING
+  CLOSED
+}
+
+enum Priority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+model Investigation {
+  id          String               @id @default(cuid())
+  displayId   String               @unique // "INV-2026-042"
+  title       String
+  description String
+  status      InvestigationStatus  @default(UNDER_INVESTIGATION)
+  priority    Priority
+  assignee    String
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  networkId   String?
+  network     Network?             @relation(fields: [networkId], references: [id])
+
+  entities    InvestigationEntity[]
+  evidence    EvidenceRecord[]
+  timeline    CaseTimelineEvent[]
+  aiAssessments AiAssessment[]
+}
+
+model InvestigationEntity {
+  investigationId String
+  entityId        String
+  investigation   Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  entity          Entity        @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@id([investigationId, entityId])
+}
+
+// AI Assessment: generated FROM structured risk-engine signals, never the
+// other way around. Store the signals alongside the generated text so the
+// explanation is always traceable back to real numbers.
+model AiAssessment {
+  id              String   @id @default(cuid())
+  investigationId String
+  investigation   Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  riskScore       Int
+  signals         Json     // [{ label, value }]
+  explanation     String   @db.Text
+  recommendedNext String?  @db.Text
+  createdAt       DateTime @default(now())
+}
+
+// ─── Evidence ────────────────────────────────────────────────────────────
+
+enum EvidenceStatus {
+  VERIFIED
+  PENDING
+  REJECTED
+}
+
+model EvidenceRecord {
+  id              String         @id @default(cuid())
+  displayId       String         @unique // "EV-1029"
+  type            String
+  hash            String         // SHA-256, actually computed
+  uploadedBy      String
+  status          EvidenceStatus @default(PENDING)
+  createdAt       DateTime       @default(now())
+
+  sourceId        String?
+  source          Source?        @relation(fields: [sourceId], references: [id])
+
+  investigationId String
+  investigation   Investigation  @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+}
+
+// ─── Wallets & Listings (blockchain + marketplace intelligence) ────────────
+
+model Wallet {
+  id          String   @id @default(cuid())
+  displayId   String   @unique // "WALLET-W1"
+  risk        Int
+  txnCount    Int      @default(0)
+  entityCount Int      @default(0)
+  cluster     String?
+  firstSeen   DateTime @default(now())
+  lastSeen    DateTime @default(now())
+  totalVolume String?  // "4.73 BTC-eq" — kept as display string for demo
+  flagged     Boolean  @default(false)
+}
+
+model Listing {
+  id         String   @id @default(cuid())
+  displayId  String   @unique // "REC-1024"
+  category   String
+  risk       Int
+  signals    Json     // string[] of detected patterns
+  firstSeen  DateTime @default(now())
+  lastSeen   DateTime @default(now())
+  status     String   // "Flagged" | "Under Review" | "Monitoring" | "Clear"
+
+  sourceId   String?
+  source     Source?  @relation(fields: [sourceId], references: [id])
+}
+
+// ─── Network graph (visual relationship map) ────────────────────────────────
+
+enum NodeType {
+  ENTITY
+  MARKET
+  LISTING
+  WALLET
+  COMM
+  TXN
+}
+
+model GraphNode {
+  id       String   @id @default(cuid())
+  label    String
+  type     NodeType
+  risk     Int
+  x        Float
+  y        Float
+
+  entityId String?  @unique
+  entity   Entity?  @relation(fields: [entityId], references: [id])
+
+  edgesFrom GraphEdge[] @relation("EdgeFrom")
+  edgesTo   GraphEdge[] @relation("EdgeTo")
+}
+
+model GraphEdge {
+  id       String    @id @default(cuid())
+  label    String    // "Appeared On", "Transacted With", "Linked To"...
+  fromId   String
+  toId     String
+  from     GraphNode @relation("EdgeFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to       GraphNode @relation("EdgeTo", fields: [toId], references: [id], onDelete: Cascade)
+}
+
+// ─── Case timeline (per-investigation narrative) ────────────────────────────
+
+model CaseTimelineEvent {
+  id              String   @id @default(cuid())
+  investigationId String
+  investigation   Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  occurredAt      DateTime
+  label           String   // "Entity Detected", "Early Warning Triggered"...
+  type            String   // "DETECTION" | "ALERT" | "DISCOVERY" | "ESCALATION" | "WARNING" | "ACTION" | "EVIDENCE"
+  source          String
+  agent           String   // "System" | "Investigator A"
+  description     String   @db.Text
+}
+
+// ─── Audit log ───────────────────────────────────────────────────────────
+
+model AuditLogEntry {
+  id        String   @id @default(cuid())
+  user      String
+  action    String
+  resource  String
+  ip        String
+  status    String   @default("Success")
+  type      String   // "read" | "write" | "export" | "admin" | "search" | "system"
+  createdAt DateTime @default(now())
+}
+
+// ─── Users (basic RBAC) ───────────────────────────────────────────────────
+
+enum Role {
+  ADMINISTRATOR
+  INVESTIGATOR
+  ANALYST
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  role      Role     @default(INVESTIGATOR)
+  createdAt DateTime @default(now())
+}
