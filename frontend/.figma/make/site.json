@@ -1,0 +1,10 @@
+{
+  "description": "A secure intelligence platform enabling law enforcement to detect, analyze, and investigate illicit drug-trafficking through explainable AI and network risk analysis.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
