@@ -9,7 +9,10 @@ export const auditRouter = Router();
 export const sourcesRouter = Router();
 
 evidenceRouter.get("/", async (_req, res) => {
-  res.json(await prisma.evidenceRecord.findMany({ include: { source: true }, orderBy: { createdAt: "desc" } }));
+  res.json(await prisma.evidenceRecord.findMany({
+    include: { source: true, investigation: true },
+    orderBy: { createdAt: "desc" },
+  }));
 });
 
 // POST /api/evidence — actually computes a SHA-256 hash of the submitted

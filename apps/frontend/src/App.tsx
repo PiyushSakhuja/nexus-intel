@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { io as socketIo } from "socket.io-client";
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
   PieChart, Pie, Cell, XAxis, YAxis,
@@ -347,7 +348,128 @@ function Topbar() {
 
 // ─── OVERVIEW ─────────────────────────────────────────────────────────────────
 
+// ─── Event type metadata ─────────────────────────────────────────────────────
+
+const EVENT_META: Record<string,{label:string;icon:string;color:string}> = {
+  event_detected:  { label:"Event Detected",   icon:"◉", color:"#06b6d4" },
+  correlation:     { label:"Entity Correlated", icon:"◈", color:"#6366f1" },
+  risk_updated:    { label:"Risk Updated",      icon:"▲", color:"#f59e0b" },
+  alert_generated: { label:"Alert Generated",   icon:"⚠", color:"#dc2626" },
+};
+
+// ─── Shared socket singleton (created once, reused across mounts) ────────────
+
+let _socket: ReturnType<typeof socketIo> | null = null;
+function getSocket() {
+  if (!_socket) {
+    _socket = socketIo("http://localhost:4000", { transports: ["websocket","polling"] });
+  }
+  return _socket;
+}
+
 function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
+  const [liveNetworks, setLiveNetworks] = useState<any[]>(emergingNetworks);
+
+  // ── Live feed state ──────────────────────────────────────────────────────
+  const [feedEvents, setFeedEvents] = useState<any[]>([]);
+  const [connected, setConnected]   = useState(false);
+  const [simulating, setSimulating] = useState(false);
+  const feedRef = useRef<HTMLDivElement>(null);
+
+  // ── Fetch initial networks ───────────────────────────────────────────────
+  useEffect(() => {
+    fetch("http://localhost:4000/api/networks")
+      .then(res => { if (!res.ok) throw new Error(); return res.json(); })
+      .then(data => {
+        const normalised = data.map((n: any) => ({
+          ...n,
+          id: n.displayId ?? n.id,
+          risk: n.risk ?? 0,
+          change: n.riskDelta ?? n.change ?? 0,
+          entities: n._count?.entities ?? n.entities ?? 0,
+          last: n.updatedAt ? new Date(n.updatedAt).toLocaleDateString() : n.last ?? "—",
+        }));
+        if (normalised.length > 0) setLiveNetworks(normalised);
+      })
+      .catch(() => {});
+  }, []);
+
+  // ── Socket.IO subscription ───────────────────────────────────────────────
+  useEffect(() => {
+    const socket = getSocket();
+
+    const onConnect    = () => setConnected(true);
+    const onDisconnect = () => setConnected(false);
+    const onEvent      = (evt: any) => {
+      const now = new Date();
+      const meta = EVENT_META[evt.type] ?? { label: evt.type, icon:"◎", color:"var(--text-3)" };
+
+      // Build human-readable description from payload
+      let detail = "";
+      if (evt.type === "event_detected")  detail = evt.payload?.description ?? "";
+      if (evt.type === "correlation")     detail = `${evt.payload?.entity ?? "Entity"} matched at ${evt.payload?.confidence ?? "?"}% confidence`;
+      if (evt.type === "risk_updated")    detail = `${evt.payload?.network}: ${evt.payload?.from} → ${evt.payload?.to}`;
+      if (evt.type === "alert_generated") detail = evt.payload?.title ?? "New alert created";
+
+      setFeedEvents(prev => [{
+        id: `${evt.type}-${now.getTime()}`,
+        type: evt.type,
+        meta,
+        detail,
+        time: now.toLocaleTimeString(),
+      }, ...prev].slice(0, 50)); // keep last 50
+
+      // If a risk_updated arrived, refresh the networks table
+      if (evt.type === "risk_updated" || evt.type === "alert_generated") {
+        fetch("http://localhost:4000/api/networks")
+          .then(r => r.json())
+          .then(data => {
+            const n = data.map((n: any) => ({
+              ...n,
+              id: n.displayId ?? n.id,
+              risk: n.risk ?? 0,
+              change: n.riskDelta ?? n.change ?? 0,
+              entities: n._count?.entities ?? n.entities ?? 0,
+              last: n.updatedAt ? new Date(n.updatedAt).toLocaleDateString() : n.last ?? "—",
+            }));
+            if (n.length > 0) setLiveNetworks(n);
+          })
+          .catch(() => {});
+      }
+    };
+
+    if (socket.connected) setConnected(true);
+    socket.on("connect",             onConnect);
+    socket.on("disconnect",          onDisconnect);
+    socket.on("intelligence-event",  onEvent);
+
+    return () => {
+      socket.off("connect",            onConnect);
+      socket.off("disconnect",         onDisconnect);
+      socket.off("intelligence-event", onEvent);
+    };
+  }, []);
+
+  // Auto-scroll feed to top when new events arrive
+  useEffect(() => {
+    feedRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, [feedEvents.length]);
+
+  // ── Simulate button handler ──────────────────────────────────────────────
+  const handleSimulate = async () => {
+    setSimulating(true);
+    try {
+      // Pick the first network from liveNetworks; fall back to N-018
+      const targetNetwork = liveNetworks[0]?.id ?? "N-018";
+      await fetch("http://localhost:4000/api/simulate/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ networkDisplayId: targetNetwork }),
+      });
+    } catch (_) { /* socket events will show what happened */ }
+    finally { setSimulating(false); }
+  };
+
   return (
     <div style={{padding:"26px 28px"}} className="anim-fade-up">
       {/* Header */}
@@ -356,8 +478,26 @@ function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
           <h1 className="section-head">Intelligence Overview</h1>
           <p className="page-sub">Monitor emerging patterns, suspicious entities, and active investigations.</p>
         </div>
-        <div style={{display:"flex",gap:8}}>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {/* Connection badge */}
+          <div style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:6,
+            background:connected?"rgba(22,163,74,0.08)":"rgba(100,100,100,0.08)",
+            border:connected?"1px solid rgba(22,163,74,0.2)":"1px solid rgba(100,100,100,0.2)"}}>
+            <PulseIndicator color={connected?"#16a34a":"#6b7280"}/>
+            <span style={{fontSize:10.5,fontWeight:600,color:connected?"var(--low-light)":"var(--text-4)"}}>
+              {connected?"Live":"Offline"}
+            </span>
+          </div>
           <button className="btn btn-ghost btn-sm">Export</button>
+          <button
+            className={`btn btn-sm ${simulating?"btn-ghost":"btn-primary"}`}
+            onClick={handleSimulate}
+            disabled={simulating}
+            style={{minWidth:200,justifyContent:"center"}}>
+            {simulating
+              ? <><span style={{width:12,height:12,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.7s linear infinite",display:"inline-block",marginRight:6}}/> Simulating…</>
+              : "⚡ Simulate Incoming Intelligence"}
+          </button>
           <button className="btn btn-primary btn-sm" onClick={()=>navigate("investigations")}>+ New Investigation</button>
         </div>
       </div>
@@ -458,7 +598,7 @@ function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
           <table className="data-table">
             <thead><tr><th>Network ID</th><th>Risk</th><th>Change</th><th>Entities</th><th>Last Activity</th></tr></thead>
             <tbody>
-              {emergingNetworks.map(n=>(
+              {liveNetworks.map(n=>(
                 <tr key={n.id} onClick={()=>navigate("network-risk")}>
                   <td><span className="mono" style={{color:"var(--accent-hi)",fontSize:12}}>{n.id}</span></td>
                   <td>
@@ -478,25 +618,86 @@ function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
           </table>
         </div>
 
-        {/* Alert feed */}
-        <div className="card" style={{padding:20}}>
+        {/* Live Intelligence Feed */}
+        <div className="card" style={{padding:20,display:"flex",flexDirection:"column"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-            <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)"}}>Recent Alerts</div>
-            <button className="btn btn-ghost btn-sm" onClick={()=>navigate("alerts")}>View All</button>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)"}}>Live Intelligence Feed</div>
+              <div style={{fontSize:10.5,color:"var(--text-3)",marginTop:1}}>
+                {connected
+                  ? <><span style={{color:"var(--low-light)"}}>●</span> Real-time events</>
+                  : <><span style={{color:"var(--text-4)"}}>○</span> Connecting…</>}
+              </div>
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={()=>navigate("alerts")}>All Alerts</button>
           </div>
-          <div style={{display:"flex",flexDirection:"column",gap:9}}>
-            {alerts.slice(0,4).map((a,i)=>(
-              <div key={a.id} className={`card-elevated anim-alert delay-${i+1}`} style={{padding:"11px 13px",cursor:"pointer",transition:"border-color 0.13s",borderRadius:9}}
-                onClick={()=>navigate("alerts")}
-                onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.borderColor=`${riskColor(a.severity)}40`;}}
-                onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.borderColor="var(--border)";}}>
-                <div style={{display:"flex",gap:9,alignItems:"flex-start"}}>
-                  <PulseIndicator color={riskColor(a.severity)}/>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:12,color:"var(--text-1)",fontWeight:500,lineHeight:1.35,marginBottom:2}}>{a.title}</div>
-                    <div style={{fontSize:10.5,color:"var(--text-4)"}}>{a.time}</div>
+
+          {/* Event stream */}
+          <div
+            ref={feedRef}
+            style={{display:"flex",flexDirection:"column",gap:8,overflowY:"auto",maxHeight:340,
+              scrollbarWidth:"thin",scrollbarColor:"rgba(255,255,255,0.08) transparent"}}>
+
+            {feedEvents.length === 0 && (
+              <div style={{textAlign:"center",padding:"32px 0",color:"var(--text-4)"}}>
+                <div style={{fontSize:22,marginBottom:8,opacity:0.3}}>◎</div>
+                <div style={{fontSize:12}}>Waiting for live events…</div>
+                <div style={{fontSize:11,marginTop:4,color:"var(--text-4)"}}>
+                  Click <span style={{color:"var(--accent-hi)"}}>Simulate Incoming Intelligence</span> to trigger the pipeline
+                </div>
+              </div>
+            )}
+
+            {feedEvents.map((evt, i) => (
+              <div
+                key={evt.id}
+                style={{
+                  display:"flex",gap:10,alignItems:"flex-start",
+                  padding:"10px 12px",borderRadius:9,
+                  background: i === 0
+                    ? `${evt.meta.color}10`
+                    : "rgba(255,255,255,0.025)",
+                  border: i === 0
+                    ? `1px solid ${evt.meta.color}30`
+                    : "1px solid var(--border)",
+                  transition:"all 0.3s",
+                  animation: i === 0 ? "anim-alert 0.35s ease-out" : "none",
+                }}>
+                {/* Icon */}
+                <div style={{
+                  width:28,height:28,borderRadius:7,flexShrink:0,
+                  background:`${evt.meta.color}18`,
+                  border:`1px solid ${evt.meta.color}35`,
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:12,color:evt.meta.color,
+                  ...(i===0 ? {boxShadow:`0 0 10px ${evt.meta.color}25`} : {}),
+                }}>
+                  {evt.meta.icon}
+                </div>
+
+                {/* Body */}
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:2}}>
+                    <span style={{fontSize:10,fontWeight:700,color:evt.meta.color,
+                      textTransform:"uppercase",letterSpacing:"0.07em"}}>
+                      {evt.meta.label}
+                    </span>
+                    {i === 0 && (
+                      <span style={{fontSize:9,padding:"1px 5px",borderRadius:3,
+                        background:`${evt.meta.color}22`,color:evt.meta.color,fontWeight:600}}>
+                        NEW
+                      </span>
+                    )}
                   </div>
-                  <RiskBadge score={a.severity}/>
+                  <div style={{fontSize:11.5,color:"var(--text-2)",lineHeight:1.4,
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {evt.detail || "—"}
+                  </div>
+                </div>
+
+                {/* Time */}
+                <div className="mono" style={{fontSize:10,color:"var(--text-4)",flexShrink:0,marginTop:1}}>
+                  {evt.time}
                 </div>
               </div>
             ))}
@@ -782,15 +983,39 @@ function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
   const [selected, setSelected] = useState<string|null>("wallet-w1");
   const [riskOverlay, setRiskOverlay] = useState(true);
   const [mode, setMode] = useState<"entity"|"network">("entity");
+  const [liveNodes, setLiveNodes] = useState<any[]>(graphNodes);
+  const [liveEdges, setLiveEdges] = useState<any[]>(graphEdges);
+
+  useEffect(() => {
+    fetch("http://localhost:4000/api/graph")
+      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+      .then(({ nodes, edges }) => {
+        // GraphNode.type comes back as the Prisma enum ("ENTITY", "WALLET"...)
+        // but typeColors/typeIcons below are keyed lowercase — without this
+        // the node color/icon lookups silently miss and every node renders
+        // with undefined styling.
+        if (nodes?.length) setLiveNodes(nodes.map((n: any) => ({ ...n, type: n.type?.toLowerCase() })));
+        if (edges?.length) {
+          // DB uses fromId/toId; normalise to from/to for SVG rendering
+          setLiveEdges(edges.map((e: any) => ({
+            ...e,
+            from: e.from ?? e.fromId,
+            to: e.to ?? e.toId,
+            label: e.label ?? e.type ?? "",
+          })));
+        }
+      })
+      .catch(() => { /* keep mock data on failure */ });
+  }, []);
 
   const typeColors: Record<string,string> = {entity:"#6366f1",market:"#8b5cf6",listing:"#d97706",wallet:"#06b6d4",comm:"#16a34a",txn:"#ea580c"};
   const typeIcons: Record<string,string> = {entity:"◈",market:"▤",listing:"▣",wallet:"◇",comm:"◉",txn:"◫"};
 
-  const selNode = graphNodes.find(n=>n.id===selected);
-  const connectedEdges = graphEdges.filter(e=>e.from===selected||e.to===selected);
+  const selNode = liveNodes.find(n=>n.id===selected);
+  const connectedEdges = liveEdges.filter(e=>e.from===selected||e.to===selected);
   const connectedIds = new Set(connectedEdges.flatMap(e=>[e.from,e.to]));
 
-  const getPos = (id: string) => graphNodes.find(n=>n.id===id)||{x:0,y:0};
+  const getPos = (id: string) => liveNodes.find(n=>n.id===id)||{x:0,y:0};
 
   return (
     <div style={{display:"flex",height:"calc(100vh - 52px)",overflow:"hidden"}}>
@@ -859,7 +1084,7 @@ function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
           <rect width="900" height="620" fill="url(#g-bg)"/>
 
           {/* Edges */}
-          {graphEdges.map((edge,i)=>{
+          {liveEdges.map((edge,i)=>{
             const f = getPos(edge.from); const t = getPos(edge.to);
             const isHighlighted = selected && (edge.from===selected||edge.to===selected);
             const mx=(f.x+t.x)/2; const my=(f.y+t.y)/2;
@@ -877,7 +1102,7 @@ function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
           })}
 
           {/* Nodes */}
-          {graphNodes.map((n,i)=>{
+          {liveNodes.map((n,i)=>{
             const color = typeColors[n.type];
             const isSel = n.id===selected;
             const isDimmed = selected && !connectedIds.has(n.id) && n.id!==selected;
@@ -938,7 +1163,7 @@ function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
             <div style={{fontSize:11,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:8}}>Connected To</div>
             {connectedEdges.map((e,i)=>{
               const otherId = e.from===selNode.id?e.to:e.from;
-              const other = graphNodes.find(n=>n.id===otherId);
+              const other = liveNodes.find(n=>n.id===otherId);
               if(!other) return null;
               const color = typeColors[other.type];
               return (
@@ -1062,8 +1287,33 @@ function NetworkRiskScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
 function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
   const [tab, setTab] = useState("All");
   const tabs = ["All","Critical","High","Medium","Resolved"];
+  const [alertRows, setAlertRows] = useState<any[]>(alerts);
+  const [alertsLoading, setAlertsLoading] = useState(true);
+  const [alertsError, setAlertsError] = useState<string|null>(null);
 
-  const filtered = alerts.filter(a=>{
+  useEffect(() => {
+    fetch("http://localhost:4000/api/alerts")
+      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+      .then(data => {
+        // normalise DB rows to match the shape the UI expects
+        const normalised = data.map((a: any) => ({
+          ...a,
+          severity: a.severity ?? a.risk ?? 50,
+          status: (a.status ?? "NEW").toLowerCase(),
+          time: a.createdAt ? new Date(a.createdAt).toLocaleString() : a.time ?? "",
+          network: a.network?.displayId ?? a.network ?? null,
+          entities: (a.entities ?? []).map((ae: any) => ae.entity?.alias ?? ae.entity?.displayId ?? ae),
+          title: a.title ?? a.type ?? "Alert",
+          reason: a.reason ?? a.description ?? "",
+        }));
+        setAlertRows(normalised);
+        setAlertsError(null);
+      })
+      .catch(err => setAlertsError(err.message))
+      .finally(() => setAlertsLoading(false));
+  }, []);
+
+  const filtered = alertRows.filter(a=>{
     if(tab==="All") return true;
     if(tab==="Resolved") return a.status==="resolved";
     if(tab==="Critical") return a.severity>=80&&a.status!=="resolved";
@@ -1089,9 +1339,11 @@ function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
         </div>
       </div>
 
+      {alertsLoading && <p className="page-sub" style={{marginBottom:12}}>Loading alerts…</p>}
+      {alertsError && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({alertsError}) — showing demo data.</p>}
       <div className="tab-strip" style={{marginBottom:18}}>
         {tabs.map(t=>{
-          const count = t==="All"?alerts.length:t==="Resolved"?alerts.filter(a=>a.status==="resolved").length:t==="Critical"?alerts.filter(a=>a.severity>=80&&a.status!=="resolved").length:t==="High"?alerts.filter(a=>a.severity>=60&&a.severity<80&&a.status!=="resolved").length:alerts.filter(a=>a.severity>=40&&a.severity<60&&a.status!=="resolved").length;
+          const count = t==="All"?alertRows.length:t==="Resolved"?alertRows.filter(a=>a.status==="resolved").length:t==="Critical"?alertRows.filter(a=>a.severity>=80&&a.status!=="resolved").length:t==="High"?alertRows.filter(a=>a.severity>=60&&a.severity<80&&a.status!=="resolved").length:alertRows.filter(a=>a.severity>=40&&a.severity<60&&a.status!=="resolved").length;
           return (
             <button key={t} className={`tab ${tab===t?"active":""}`} onClick={()=>setTab(t)}>
               {t} <span style={{marginLeft:4,fontSize:10,opacity:0.7}}>({count})</span>
@@ -1350,13 +1602,42 @@ function ListingsScreen() {
 // ─── BLOCKCHAIN ───────────────────────────────────────────────────────────────
 
 function BlockchainScreen() {
-  const [sel, setSel] = useState(wallets[0]);
+  const [walletRows, setWalletRows] = useState<any[]>(wallets);
+  const [walletsLoading, setWalletsLoading] = useState(true);
+  const [walletsError, setWalletsError] = useState<string|null>(null);
+  const [sel, setSel] = useState<any>(wallets[0]);
 
+  useEffect(() => {
+    fetch("http://localhost:4000/api/wallets")
+      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+      .then(data => {
+        const normalised = data.map((w: any) => ({
+          ...w,
+          txns: w.txns ?? w.txnCount ?? 0,
+          entities: w.entities ?? w.entityCount ?? 0,
+          cluster: w.cluster ?? w.clusterId ?? "—",
+          totalVol: w.totalVol ?? w.totalVolume ?? "—",
+          first: w.first ?? (w.firstSeen ? new Date(w.firstSeen).toLocaleDateString() : "—"),
+          last: w.last ?? (w.lastSeen ? new Date(w.lastSeen).toLocaleDateString() : "—"),
+          flagged: w.flagged ?? w.risk >= 70,
+        }));
+        setWalletRows(normalised);
+        if (normalised.length > 0) setSel(normalised[0]);
+        setWalletsError(null);
+      })
+      .catch(err => setWalletsError(err.message))
+      .finally(() => setWalletsLoading(false));
+  }, []);
+
+  // Derived from walletRows (real once the /api/wallets fetch lands, mock
+  // data otherwise) instead of hardcoded numbers that never matched what
+  // the table below actually showed.
+  const totalTxns = walletRows.reduce((sum, w) => sum + (w.txns ?? 0), 0);
   const blockKpis = [
-    {label:"Tracked Wallets",val:"319",color:"#6366f1"},
-    {label:"High-Risk Wallets",val:"47",color:"var(--critical)"},
-    {label:"Transactions Analysed",val:"8.4K",color:"var(--cyan)"},
-    {label:"Emerging Clusters",val:"8",color:"var(--purple)"},
+    {label:"Tracked Wallets",val:String(walletRows.length),color:"#6366f1"},
+    {label:"High-Risk Wallets",val:String(walletRows.filter(w=>w.risk>=70).length),color:"var(--critical)"},
+    {label:"Transactions Analysed",val: totalTxns>=1000 ? `${(totalTxns/1000).toFixed(1)}K` : String(totalTxns), color:"var(--cyan)"},
+    {label:"Emerging Clusters",val:String(new Set(walletRows.map(w=>w.cluster)).size),color:"var(--purple)"},
   ];
 
   return (
@@ -1378,11 +1659,13 @@ function BlockchainScreen() {
       <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:16}}>
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           {/* Wallet table */}
+          {walletsLoading && <p className="page-sub" style={{marginBottom:8,paddingLeft:16}}>Loading wallets…</p>}
+          {walletsError && <p className="page-sub" style={{marginBottom:8,paddingLeft:16,color:"var(--high-light)"}}>Couldn't reach the API — showing demo data.</p>}
           <div className="card">
             <table className="data-table">
               <thead><tr><th>Wallet ID</th><th>Risk</th><th>Transactions</th><th>Entities</th><th>Cluster</th><th>Volume</th><th>Last Active</th></tr></thead>
               <tbody>
-                {wallets.map(w=>(
+                {walletRows.map(w=>(
                   <tr key={w.id} className={sel?.id===w.id?"selected":""} onClick={()=>setSel(w)}>
                     <td>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -1464,6 +1747,36 @@ function InvestigationsScreen({ navigate }: { navigate:(s:string,d?:any)=>void }
     "MONITORING":"#22d3ee",
     "CLOSED":"var(--text-4)",
   };
+  const [invRows, setInvRows] = useState<any[]>(investigations);
+  const [invLoading, setInvLoading] = useState(true);
+  const [invError, setInvError] = useState<string|null>(null);
+
+  useEffect(() => {
+    fetch("http://localhost:4000/api/investigations")
+      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+      .then(data => {
+        const normalised = data.map((inv: any) => ({
+          ...inv,
+          // DB rows carry both a cuid `id` and a readable `displayId`
+          // ("INV-2026-042") — the UI expects the latter wherever it shows
+          // `inv.id`.
+          id: inv.displayId ?? inv.id,
+          entities: inv._count?.entities ?? inv.entities ?? 0,
+          evidence: inv._count?.evidence ?? inv.evidence ?? 0,
+          // InvestigationStatus enum values use underscores ("UNDER_REVIEW");
+          // the status pill colours/labels are keyed on spaced text.
+          status: (inv.status ?? "UNDER_INVESTIGATION").replace(/_/g, " "),
+          priority: inv.priority ?? "MEDIUM",
+          assignee: inv.assignee ?? "Unassigned",
+          updated: inv.updatedAt ? new Date(inv.updatedAt).toLocaleDateString() : inv.updated ?? "",
+          description: inv.description ?? "",
+        }));
+        setInvRows(normalised);
+        setInvError(null);
+      })
+      .catch(err => setInvError(err.message))
+      .finally(() => setInvLoading(false));
+  }, []);
 
   return (
     <div style={{padding:"26px 28px"}}>
@@ -1474,9 +1787,10 @@ function InvestigationsScreen({ navigate }: { navigate:(s:string,d?:any)=>void }
         </div>
         <button className="btn btn-primary">+ New Investigation</button>
       </div>
-
+      {invLoading && <p className="page-sub" style={{marginBottom:12}}>Loading investigations…</p>}
+      {invError && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({invError}) — showing demo data.</p>}
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14}}>
-        {investigations.map((inv,i)=>(
+        {invRows.map((inv,i)=>(
           <div key={inv.id} className={`card card-hover anim-fade-up delay-${i+1}`} style={{padding:20}} onClick={()=>navigate("workspace")}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
               <span className="mono-sm" style={{color:"var(--accent-hi)"}}>{inv.id}</span>
@@ -1721,7 +2035,38 @@ function TimelineScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
 // ─── EVIDENCE ─────────────────────────────────────────────────────────────────
 
 function EvidenceScreen() {
-  const [sel, setSel] = useState<typeof evidenceRecords[0]|null>(null);
+  const [evidenceRows, setEvidenceRows] = useState<any[]>(evidenceRecords);
+  const [evidenceLoading, setEvidenceLoading] = useState(true);
+  const [evidenceError, setEvidenceError] = useState<string|null>(null);
+  const [sel, setSel] = useState<any|null>(null);
+
+  useEffect(() => {
+    fetch("http://localhost:4000/api/evidence")
+      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+      .then(data => {
+        const normalised = data.map((ev: any) => ({
+          ...ev,
+          // Same displayId vs cuid issue as Investigations ("EV-1029" vs a
+          // raw cuid).
+          id: ev.displayId ?? ev.id,
+          type: ev.type ?? "Document",
+          source: ev.source?.name ?? ev.source ?? "Unknown",
+          ts: ev.createdAt ? new Date(ev.createdAt).toLocaleString() : ev.ts ?? "",
+          hash: ev.hash ?? "—",
+          // ev.investigationId is the raw FK (a cuid) — use the readable
+          // displayId from the now-included investigation relation instead.
+          caseRef: ev.investigation?.displayId ?? ev.investigationId ?? ev.caseRef ?? "—",
+          by: ev.uploadedBy ?? ev.by ?? "System",
+          // EvidenceStatus enum is "VERIFIED"/"PENDING"/"REJECTED"; the badge
+          // check below compares against title-case "Verified".
+          status: ev.status ? ev.status.charAt(0) + ev.status.slice(1).toLowerCase() : "Pending",
+        }));
+        setEvidenceRows(normalised);
+        setEvidenceError(null);
+      })
+      .catch(err => setEvidenceError(err.message))
+      .finally(() => setEvidenceLoading(false));
+  }, []);
 
   return (
     <div style={{padding:"26px 28px"}}>
@@ -1736,12 +2081,14 @@ function EvidenceScreen() {
         </div>
       </div>
 
+      {evidenceLoading && <p className="page-sub" style={{marginBottom:12}}>Loading evidence…</p>}
+      {evidenceError && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({evidenceError}) — showing demo data.</p>}
       <div style={{display:"grid",gridTemplateColumns:sel?"1fr 380px":"1fr",gap:16,transition:"all 0.25s"}}>
         <div className="card">
           <table className="data-table">
             <thead><tr><th>ID</th><th>Type</th><th>Source</th><th>Timestamp</th><th>SHA-256 (partial)</th><th>Case</th><th>By</th><th>Status</th></tr></thead>
             <tbody>
-              {evidenceRecords.map(ev=>(
+              {evidenceRows.map(ev=>(
                 <tr key={ev.id} className={sel?.id===ev.id?"selected":""} onClick={()=>setSel(ev.id===sel?.id?null:ev)}>
                   <td><span className="mono" style={{color:"var(--accent-hi)",fontSize:12}}>{ev.id}</span></td>
                   <td>{ev.type}</td>
@@ -1937,7 +2284,7 @@ function AnalyticsScreen() {
 
         <div className="card" style={{padding:20}}>
           <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:14}}>Emerging Network Ranking</div>
-          {emergingNetworks.map((n,i)=>(
+          {(emergingNetworks).map((n,i)=>(
             <div key={n.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
               <span style={{fontSize:12,color:"var(--text-4)",fontWeight:700,width:18,textAlign:"center"}}>{i+1}</span>
               <span className="mono-sm" style={{color:"var(--accent-hi)",width:50}}>{n.id}</span>
@@ -2050,6 +2397,30 @@ function ReportsScreen() {
 
 function AuditScreen() {
   const typeColors: Record<string,string> = {read:"var(--accent)",write:"var(--low-light)",export:"var(--cyan)",admin:"var(--medium-light)",system:"var(--text-3)",search:"var(--purple)"};
+  const [auditRows, setAuditRows] = useState<any[]>(auditLog);
+  const [auditLoading, setAuditLoading] = useState(true);
+  const [auditError, setAuditError] = useState<string|null>(null);
+
+  useEffect(() => {
+    fetch("http://localhost:4000/api/audit-log")
+      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+      .then(data => {
+        const normalised = data.map((entry: any) => ({
+          ...entry,
+          ts: entry.ts ?? (entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "—"),
+          user: entry.user ?? entry.userId ?? "System",
+          type: (entry.type ?? entry.actionType ?? "system").toLowerCase(),
+          action: entry.action ?? entry.description ?? "—",
+          resource: entry.resource ?? entry.resourceId ?? "—",
+          ip: entry.ip ?? entry.ipAddress ?? "—",
+          status: entry.status ?? "OK",
+        }));
+        setAuditRows(normalised);
+        setAuditError(null);
+      })
+      .catch(err => setAuditError(err.message))
+      .finally(() => setAuditLoading(false));
+  }, []);
 
   return (
     <div style={{padding:"26px 28px"}}>
@@ -2071,13 +2442,15 @@ function AuditScreen() {
         ))}
       </div>
 
+      {auditLoading && <p className="page-sub" style={{marginBottom:12}}>Loading audit log…</p>}
+      {auditError && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({auditError}) — showing demo data.</p>}
       <div className="card">
         <table className="data-table">
           <thead>
             <tr><th>Timestamp</th><th>User</th><th>Action Type</th><th>Action</th><th>Resource</th><th>IP / Session</th><th>Status</th></tr>
           </thead>
           <tbody>
-            {auditLog.map((log,i)=>(
+            {auditRows.map((log,i)=>(
               <tr key={i}>
                 <td><span className="mono" style={{fontSize:11.5,color:"var(--text-3)"}}>{log.ts}</span></td>
                 <td><span style={{color:"var(--text-1)",fontWeight:500}}>{log.user}</span></td>

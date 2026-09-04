@@ -3028,6 +3028,575 @@ async function main() {
   })
 
   console.log('Listings created: 120')
+
+  // ─── Alerts ─────────────────────────────────────────────────────────────────
+  // NOTE: this table was previously never seeded, so GET /api/alerts correctly
+  // returned [] and the Alert Center rendered empty once the fetch overwrote
+  // the mock fallback state. Seeding it here fixes that.
+
+  await prisma.alert.upsert({
+    where: { displayId: "ALT-089" },
+    update: {},
+    create: {
+      id: "alt_089k3n6qy1e4mvxg7c2wsd0p",
+      displayId: "ALT-089",
+      severity: 91,
+      title: "Network N-042 crossed critical risk threshold",
+      reason: "3 connected high-risk entities, 2 recurring identifiers, abnormal transaction pattern",
+      status: "NEW",
+      createdAt: new Date(Date.now() - 2 * 60 * 1000),
+      entities: {
+        create: [
+          { entityId: "ent_1xrdh2up5txj6u7usgd8psmf" }, // Hackyboy
+          { entityId: "ent_8tobfmrwoq0xap29a8cm4yt8" }, // goldendrugs
+        ],
+      },
+    },
+  })
+
+  await prisma.alert.upsert({
+    where: { displayId: "ALT-088" },
+    update: {},
+    create: {
+      id: "alt_088h7t2mx9k5qbwvz3ryf1n8",
+      displayId: "ALT-088",
+      severity: 74,
+      title: "New wallet relationship detected in tracked cluster",
+      reason: "Wallet linked to known high-risk cluster; cross-source identifier match confidence 87%",
+      status: "NEW",
+      createdAt: new Date(Date.now() - 14 * 60 * 1000),
+      entities: {
+        create: [
+          { entityId: "ent_lvwg0jr1ws23e7ytwpsgoupu" }, // HappyEyes
+        ],
+      },
+    },
+  })
+
+  await prisma.alert.upsert({
+    where: { displayId: "ALT-087" },
+    update: {},
+    create: {
+      id: "alt_087d4x8vq2j6ryhw0mtc5b1s",
+      displayId: "ALT-087",
+      severity: 58,
+      title: "Repeated identifier observed across 3 intelligence sources",
+      reason: "Same communication identifier appeared across Source Alpha, Beta, and Gamma independently",
+      status: "REVIEWED",
+      createdAt: new Date(Date.now() - 31 * 60 * 1000),
+      entities: {
+        create: [
+          { entityId: "ent_8gc0m2lwr3qoaocu2h09dmeh" }, // OnePiece
+        ],
+      },
+    },
+  })
+
+  await prisma.alert.upsert({
+    where: { displayId: "ALT-086" },
+    update: {},
+    create: {
+      id: "alt_086w5n1jk8v3rytc6qm2b9zx",
+      displayId: "ALT-086",
+      severity: 45,
+      title: "Listing activity spike in monitored category",
+      reason: "Listing frequency increased 340% over baseline in a 4-hour window",
+      status: "REVIEWED",
+      createdAt: new Date(Date.now() - 72 * 60 * 1000),
+      entities: { create: [] },
+    },
+  })
+
+  await prisma.alert.upsert({
+    where: { displayId: "ALT-085" },
+    update: {},
+    create: {
+      id: "alt_085q9c3fw7m1xvbz4trh6y2k",
+      displayId: "ALT-085",
+      severity: 91,
+      title: "Entity resolution confidence exceeded 95% threshold",
+      reason: "Cross-source entity correlation achieved 96% match confidence across 3 independent sources",
+      status: "RESOLVED",
+      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      entities: {
+        create: [
+          { entityId: "ent_73ueeguxfcv4jp6qpoy1sc0q" }, // RepAAA
+        ],
+      },
+    },
+  })
+
+  await prisma.alert.upsert({
+    where: { displayId: "ALT-084" },
+    update: {},
+    create: {
+      id: "alt_084r6y0hb4n8wzkx1sq7c3md",
+      displayId: "ALT-084",
+      severity: 62,
+      title: "Blockchain cluster Cluster-C1 shows abnormal outflow",
+      reason: "Transaction volume 5.2x above 30-day moving average; timing correlation with listing activity",
+      status: "RESOLVED",
+      createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
+      entities: {
+        create: [
+          { entityId: "ent_2fazmtzljxq1u25vcqrzr1yi" }, // DUTCHBULK
+        ],
+      },
+    },
+  })
+
+  console.log('Alerts created: 6')
+
+  // ─── Wallets ────────────────────────────────────────────────────────────────
+  // Same issue as Alert: table was never seeded, so /api/wallets returned []
+  // regardless of the txnCount/entityCount field-name fix in the frontend.
+
+  await prisma.wallet.upsert({
+    where: { displayId: "WALLET-W1" },
+    update: {},
+    create: {
+      id: "wal_w1a9k4n7t2vqmxz6ryc0h5bd",
+      displayId: "WALLET-W1",
+      risk: 87,
+      txnCount: 42,
+      entityCount: 8,
+      cluster: "Cluster-C1",
+      firstSeen: new Date("2026-08-12T00:00:00+00:00"),
+      lastSeen: new Date("2026-08-16T00:00:00+00:00"),
+      totalVolume: "4.73 BTC-eq",
+      flagged: true,
+    },
+  })
+
+  await prisma.wallet.upsert({
+    where: { displayId: "WALLET-W2" },
+    update: {},
+    create: {
+      id: "wal_w2c7m3x9q1vryhz5tbk0n8f4",
+      displayId: "WALLET-W2",
+      risk: 74,
+      txnCount: 28,
+      entityCount: 5,
+      cluster: "Cluster-C1",
+      firstSeen: new Date("2026-08-10T00:00:00+00:00"),
+      lastSeen: new Date("2026-08-15T00:00:00+00:00"),
+      totalVolume: "2.18 BTC-eq",
+      flagged: true,
+    },
+  })
+
+  await prisma.wallet.upsert({
+    where: { displayId: "WALLET-W3" },
+    update: {},
+    create: {
+      id: "wal_w3f2b8h5k1tyrvz9mqxc4n7d",
+      displayId: "WALLET-W3",
+      risk: 61,
+      txnCount: 15,
+      entityCount: 3,
+      cluster: "Cluster-C2",
+      firstSeen: new Date("2026-08-08T00:00:00+00:00"),
+      lastSeen: new Date("2026-08-14T00:00:00+00:00"),
+      totalVolume: "0.94 BTC-eq",
+      flagged: false,
+    },
+  })
+
+  await prisma.wallet.upsert({
+    where: { displayId: "WALLET-W4" },
+    update: {},
+    create: {
+      id: "wal_w4n6q0v3x8tzrymb1hc5k9f",
+      displayId: "WALLET-W4",
+      risk: 44,
+      txnCount: 9,
+      entityCount: 2,
+      cluster: "Cluster-C2",
+      firstSeen: new Date("2026-08-07T00:00:00+00:00"),
+      lastSeen: new Date("2026-08-13T00:00:00+00:00"),
+      totalVolume: "0.41 BTC-eq",
+      flagged: false,
+    },
+  })
+
+  await prisma.wallet.upsert({
+    where: { displayId: "WALLET-W5" },
+    update: {},
+    create: {
+      id: "wal_w5k1c4m8b0tyrxq7nzv3h6f",
+      displayId: "WALLET-W5",
+      risk: 31,
+      txnCount: 6,
+      entityCount: 1,
+      cluster: "Cluster-C3",
+      firstSeen: new Date("2026-08-05T00:00:00+00:00"),
+      lastSeen: new Date("2026-08-12T00:00:00+00:00"),
+      totalVolume: "0.17 BTC-eq",
+      flagged: false,
+    },
+  })
+
+  console.log('Wallets created: 5')
+
+  // ─── Extra sources used by Evidence records ─────────────────────────────────
+  // Only the two marketplace sources existed before; evidence needs a few
+  // non-marketplace ones too ("Blockchain Data", "System", etc).
+
+  const sourceAlpha = await prisma.source.upsert({
+    where: { name: "Source Alpha" }, update: {},
+    create: { id: "src_alpha1n2t3e4l5f6e7e8d9", name: "Source Alpha", type: "Intelligence feed", access: SourceAccess.AUTHORIZED },
+  })
+  const sourceBeta = await prisma.source.upsert({
+    where: { name: "Source Beta" }, update: {},
+    create: { id: "src_beta1n2t3e4l5f6e7e8d9", name: "Source Beta", type: "Intelligence feed", access: SourceAccess.AUTHORIZED },
+  })
+  const sourceGamma = await prisma.source.upsert({
+    where: { name: "Source Gamma" }, update: {},
+    create: { id: "src_gamma1n2t3e4l5f6e7e8", name: "Source Gamma", type: "Intelligence feed", access: SourceAccess.PUBLIC },
+  })
+  const sourceBlockchain = await prisma.source.upsert({
+    where: { name: "Blockchain Data" }, update: {},
+    create: { id: "src_chain1b2l3o4c5k6d7a8", name: "Blockchain Data", type: "Blockchain data", access: SourceAccess.SYNTHETIC },
+  })
+  const sourceSystem = await prisma.source.upsert({
+    where: { name: "System" }, update: {},
+    create: { id: "src_system1i2n3t4e5r6n7a", name: "System", type: "System", access: SourceAccess.AUTHORIZED },
+  })
+
+  console.log('Sources created: 5 additional')
+
+  // ─── Networks ───────────────────────────────────────────────────────────────
+  // Previously unseeded — this is why the Overview "Emerging Networks" table,
+  // Alert.network and Investigation.network relations, and Network Graph all
+  // had nothing real to point at.
+
+  const netN042 = await prisma.network.upsert({
+    where: { displayId: "N-042" }, update: {},
+    create: { id: "net_n042a1b2c3d4e5f6g7h8i9", displayId: "N-042", risk: 91, change: 59, status: "CRITICAL", lastActivity: new Date(Date.now() - 2 * 60 * 1000) },
+  })
+  const netN018 = await prisma.network.upsert({
+    where: { displayId: "N-018" }, update: {},
+    create: { id: "net_n018b2c3d4e5f6g7h8i9j0", displayId: "N-018", risk: 78, change: 31, status: "HIGH", lastActivity: new Date(Date.now() - 18 * 60 * 1000) },
+  })
+  const netN067 = await prisma.network.upsert({
+    where: { displayId: "N-067" }, update: {},
+    create: { id: "net_n067c3d4e5f6g7h8i9j0k1", displayId: "N-067", risk: 72, change: 24, status: "HIGH", lastActivity: new Date(Date.now() - 60 * 60 * 1000) },
+  })
+  const netN031 = await prisma.network.upsert({
+    where: { displayId: "N-031" }, update: {},
+    create: { id: "net_n031d4e5f6g7h8i9j0k1l2", displayId: "N-031", risk: 65, change: 19, status: "HIGH", lastActivity: new Date(Date.now() - 3 * 60 * 60 * 1000) },
+  })
+  const netN009 = await prisma.network.upsert({
+    where: { displayId: "N-009" }, update: {},
+    create: { id: "net_n009e5f6g7h8i9j0k1l2m3", displayId: "N-009", risk: 58, change: 14, status: "MEDIUM", lastActivity: new Date(Date.now() - 6 * 60 * 60 * 1000) },
+  })
+
+  // Attach a handful of already-seeded entities to networks so the
+  // "entities" counts on Overview/Investigations aren't zero.
+  await prisma.entity.update({ where: { displayId: "Hackyboy" },    data: { networkId: netN042.id } })
+  await prisma.entity.update({ where: { displayId: "goldendrugs" }, data: { networkId: netN042.id } })
+  await prisma.entity.update({ where: { displayId: "HappyEyes" },   data: { networkId: netN042.id } })
+  await prisma.entity.update({ where: { displayId: "OnePiece" },    data: { networkId: netN018.id } })
+  await prisma.entity.update({ where: { displayId: "RepAAA" },      data: { networkId: netN018.id } })
+  await prisma.entity.update({ where: { displayId: "DUTCHBULK" },       data: { networkId: netN067.id } })
+  await prisma.entity.update({ where: { displayId: "Doug-Heffernan" },  data: { networkId: netN067.id } })
+  await prisma.entity.update({ where: { displayId: "montana193" }, data: { networkId: netN031.id } })
+  await prisma.entity.update({ where: { displayId: "cerberus" },   data: { networkId: netN031.id } })
+  await prisma.entity.update({ where: { displayId: "Junkiepig666" }, data: { networkId: netN009.id } })
+
+  console.log('Networks created: 5')
+
+  // ─── Network graph (GraphNode / GraphEdge) ───────────────────────────────────
+  // Previously unseeded, so GET /api/graph returned { nodes: [], edges: [] }.
+  // Because the frontend only overwrites its mock nodes/edges when the
+  // response is non-empty, the Network Graph screen silently kept showing
+  // the hardcoded demo layout with no error and no indication anything
+  // was wrong — seeding this table is the actual fix.
+
+  await prisma.graphNode.upsert({
+    where: { id: "gph_alias_x" }, update: {},
+    create: { id: "gph_alias_x", label: "Alias_X", type: "ENTITY", risk: 84, x: 420, y: 240, entityId: "ent_1xrdh2up5txj6u7usgd8psmf" },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_alias_y" }, update: {},
+    create: { id: "gph_alias_y", label: "Alias_Y", type: "ENTITY", risk: 71, x: 680, y: 180, entityId: "ent_lvwg0jr1ws23e7ytwpsgoupu" },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_market_a" }, update: {},
+    create: { id: "gph_market_a", label: "Marketplace_A", type: "MARKET", risk: 72, x: 240, y: 340 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_market_b" }, update: {},
+    create: { id: "gph_market_b", label: "Marketplace_B", type: "MARKET", risk: 49, x: 330, y: 150 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_listing_17" }, update: {},
+    create: { id: "gph_listing_17", label: "Listing_017", type: "LISTING", risk: 58, x: 148, y: 460 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_wallet_w1" }, update: {},
+    create: { id: "gph_wallet_w1", label: "Wallet_W1", type: "WALLET", risk: 87, x: 560, y: 350 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_wallet_w2" }, update: {},
+    create: { id: "gph_wallet_w2", label: "Wallet_W2", type: "WALLET", risk: 74, x: 620, y: 480 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_comm_04" }, update: {},
+    create: { id: "gph_comm_04", label: "Comm_ID_04", type: "COMM", risk: 62, x: 520, y: 130 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_txn_001" }, update: {},
+    create: { id: "gph_txn_001", label: "Txn_3f8a", type: "TXN", risk: 55, x: 690, y: 380 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_alias_z" }, update: {},
+    create: { id: "gph_alias_z", label: "Alias_Z", type: "ENTITY", risk: 52, x: 780, y: 290, entityId: "ent_8gc0m2lwr3qoaocu2h09dmeh" },
+  })
+
+  const graphEdgeSeeds: [string, string, string][] = [
+    ["gph_alias_x", "gph_market_a", "Appeared On"],
+    ["gph_alias_x", "gph_market_b", "Appeared On"],
+    ["gph_alias_x", "gph_wallet_w1", "Transacted With"],
+    ["gph_alias_x", "gph_comm_04", "Linked To"],
+    ["gph_market_a", "gph_listing_17", "Contains"],
+    ["gph_wallet_w1", "gph_wallet_w2", "Transacted With"],
+    ["gph_wallet_w1", "gph_alias_y", "Associated With"],
+    ["gph_wallet_w2", "gph_txn_001", "Transacted With"],
+    ["gph_alias_y", "gph_market_a", "Appeared On"],
+    ["gph_alias_y", "gph_alias_z", "Shared Identifier"],
+    ["gph_txn_001", "gph_alias_z", "Associated With"],
+  ]
+  for (const [fromId, toId, label] of graphEdgeSeeds) {
+    const id = `gph_edge_${fromId}_${toId}`
+    await prisma.graphEdge.upsert({
+      where: { id }, update: {},
+      create: { id, fromId, toId, label },
+    })
+  }
+
+  console.log('Graph nodes/edges created: 10 / 11')
+
+  // ─── Investigations ───────────────────────────────────────────────────────
+
+  const inv042 = await prisma.investigation.upsert({
+    where: { displayId: "INV-2026-042" }, update: {},
+    create: {
+      id: "inv_042a1b2c3d4e5f6g7h8i9j0",
+      displayId: "INV-2026-042",
+      title: "Emerging Network Investigation",
+      description: "Cross-source network N-042 investigation following early-warning trigger on Aug 16, 2026. Primary entity Alias_X resolved with 93% confidence across 4 sources.",
+      status: "UNDER_INVESTIGATION",
+      priority: "HIGH",
+      assignee: "Investigator A",
+      networkId: netN042.id,
+      createdAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000),
+      updatedAt: new Date(Date.now() - 4 * 60 * 1000),
+      entities: { create: [
+        { entityId: "ent_1xrdh2up5txj6u7usgd8psmf" }, // Hackyboy
+        { entityId: "ent_8tobfmrwoq0xap29a8cm4yt8" }, // goldendrugs
+        { entityId: "ent_lvwg0jr1ws23e7ytwpsgoupu" }, // HappyEyes
+      ] },
+    },
+  })
+
+  const inv039 = await prisma.investigation.upsert({
+    where: { displayId: "INV-2026-039" }, update: {},
+    create: {
+      id: "inv_039b2c3d4e5f6g7h8i9j0k1",
+      displayId: "INV-2026-039",
+      title: "Cross-Source Entity Resolution",
+      description: "Entity resolution case for Username_X23 cluster. Multiple aliases identified with high confidence.",
+      status: "UNDER_INVESTIGATION",
+      priority: "HIGH",
+      assignee: "Investigator B",
+      createdAt: new Date(Date.now() - 12 * 24 * 60 * 60 * 1000),
+      updatedAt: new Date(Date.now() - 60 * 60 * 1000),
+      entities: { create: [
+        { entityId: "ent_8gc0m2lwr3qoaocu2h09dmeh" }, // OnePiece
+        { entityId: "ent_73ueeguxfcv4jp6qpoy1sc0q" }, // RepAAA
+      ] },
+    },
+  })
+
+  const inv031 = await prisma.investigation.upsert({
+    where: { displayId: "INV-2026-031" }, update: {},
+    create: {
+      id: "inv_031c3d4e5f6g7h8i9j0k1l2",
+      displayId: "INV-2026-031",
+      title: "Wallet Cluster Analysis",
+      description: "Blockchain cluster Cluster-C1 analysis following abnormal outflow detection.",
+      status: "UNDER_REVIEW",
+      priority: "MEDIUM",
+      assignee: "Investigator A",
+      createdAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+      updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      entities: { create: [
+        { entityId: "ent_2fazmtzljxq1u25vcqrzr1yi" }, // DUTCHBULK
+      ] },
+    },
+  })
+
+  const inv028 = await prisma.investigation.upsert({
+    where: { displayId: "INV-2026-028" }, update: {},
+    create: {
+      id: "inv_028d4e5f6g7h8i9j0k1l2m3",
+      displayId: "INV-2026-028",
+      title: "Marketplace Activity Monitoring",
+      description: "Ongoing monitoring of Source Alpha and Source Beta listing patterns.",
+      status: "MONITORING",
+      priority: "MEDIUM",
+      assignee: "Investigator C",
+      createdAt: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000),
+      updatedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      entities: { create: [
+        { entityId: "ent_71kf7ep57waaq4s375mblf7d" }, // montana193
+        { entityId: "ent_bus6n2achj04ej8dqgy1m7al" }, // cerberus
+      ] },
+    },
+  })
+
+  const inv019 = await prisma.investigation.upsert({
+    where: { displayId: "INV-2026-019" }, update: {},
+    create: {
+      id: "inv_019e5f6g7h8i9j0k1l2m3n4",
+      displayId: "INV-2026-019",
+      title: "Historical Pattern Analysis",
+      description: "Completed retrospective analysis of Aug 1–10 baseline patterns.",
+      status: "CLOSED",
+      priority: "LOW",
+      assignee: "Investigator B",
+      createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      updatedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+      entities: { create: [
+        { entityId: "ent_w3sep9t5l55xsksbmestqdtt" }, // Junkiepig666
+      ] },
+    },
+  })
+
+  console.log('Investigations created: 5')
+
+  // ─── Evidence ───────────────────────────────────────────────────────────────
+
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1029" }, update: {},
+    create: {
+      id: "evd_1029a1b2c3d4e5f6g7h8i9",
+      displayId: "EV-1029",
+      type: "Intelligence Record",
+      hash: "7A9F3C2D1B4E8A6F93C0D5B2E7F1A4C8",
+      uploadedBy: "Investigator A",
+      status: "VERIFIED",
+      sourceId: sourceAlpha.id,
+      investigationId: inv042.id,
+      createdAt: new Date("2026-08-16T19:32:00+00:00"),
+    },
+  })
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1028" }, update: {},
+    create: {
+      id: "evd_1028b2c3d4e5f6g7h8i9j0",
+      displayId: "EV-1028",
+      type: "Wallet Transaction Log",
+      hash: "B2E4F8A1C6D9E3B72A5C8F0D4E7B1A9C",
+      uploadedBy: "Investigator A",
+      status: "VERIFIED",
+      sourceId: sourceBlockchain.id,
+      investigationId: inv042.id,
+      createdAt: new Date("2026-08-16T18:47:00+00:00"),
+    },
+  })
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1025" }, update: {},
+    create: {
+      id: "evd_1025c3d4e5f6g7h8i9j0k1",
+      displayId: "EV-1025",
+      type: "Communication Record",
+      hash: "C4A8E2D7F1B3C9A5E6D0F2B4C8A1E7D3",
+      uploadedBy: "Investigator B",
+      status: "PENDING",
+      sourceId: sourceBeta.id,
+      investigationId: inv042.id,
+      createdAt: new Date("2026-08-15T14:22:00+00:00"),
+    },
+  })
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1021" }, update: {},
+    create: {
+      id: "evd_1021d4e5f6g7h8i9j0k1l2",
+      displayId: "EV-1021",
+      type: "Network Analysis Report",
+      hash: "D6B2C4E8F3A7B1C9D5E2A4F6B8C0D3E7",
+      uploadedBy: "System",
+      status: "VERIFIED",
+      sourceId: sourceSystem.id,
+      investigationId: inv039.id,
+      createdAt: new Date("2026-08-14T10:05:00+00:00"),
+    },
+  })
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1018" }, update: {},
+    create: {
+      id: "evd_1018e5f6g7h8i9j0k1l2m3",
+      displayId: "EV-1018",
+      type: "Intelligence Record",
+      hash: "E8D4A6C2B8F5C3D1E7A9B3C5D8F2A0E4",
+      uploadedBy: "Investigator B",
+      status: "VERIFIED",
+      sourceId: sourceGamma.id,
+      investigationId: inv039.id,
+      createdAt: new Date("2026-08-13T16:30:00+00:00"),
+    },
+  })
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1015" }, update: {},
+    create: {
+      id: "evd_1015f6g7h8i9j0k1l2m3n4",
+      displayId: "EV-1015",
+      type: "Listing Capture",
+      hash: "F1A3C5E7B9D2F4A6C8E0B2D4F6A8C0E2",
+      uploadedBy: "System",
+      status: "VERIFIED",
+      sourceId: sourceAlpha.id,
+      investigationId: inv042.id,
+      createdAt: new Date("2026-08-12T09:14:00+00:00"),
+    },
+  })
+
+  console.log('Evidence records created: 6')
+
+  // ─── Audit log ──────────────────────────────────────────────────────────────
+
+  const auditLogSeeds = [
+    { id: "adt_001a1b2c3d4e5f6g7h8i9j", user: "Investigator A", action: "Generated Report",       resource: "INV-2026-042", ip: "10.0.1.47", type: "export", minsAgo: 3 },
+    { id: "adt_002b2c3d4e5f6g7h8i9j0k", user: "Investigator A", action: "Added Evidence",         resource: "EV-1029",      ip: "10.0.1.47", type: "write",  minsAgo: 6 },
+    { id: "adt_003c3d4e5f6g7h8i9j0k1l", user: "Investigator A", action: "Viewed Entity",          resource: "Hackyboy",     ip: "10.0.1.47", type: "read",   minsAgo: 8 },
+    { id: "adt_004d4e5f6g7h8i9j0k1l2m", user: "Investigator B", action: "Exported Data",          resource: "INV-2026-039", ip: "10.0.2.33", type: "export", minsAgo: 12 },
+    { id: "adt_005e5f6g7h8i9j0k1l2m3n", user: "Investigator A", action: "Created Investigation",  resource: "INV-2026-042", ip: "10.0.1.47", type: "write",  minsAgo: 15 },
+    { id: "adt_006f6g7h8i9j0k1l2m3n4o", user: "Admin",          action: "Modified Permissions",   resource: "Investigator C", ip: "10.0.0.1", type: "admin", minsAgo: 18 },
+    { id: "adt_007g7h8i9j0k1l2m3n4o5p", user: "Investigator C", action: "Viewed Alert",           resource: "ALT-089",      ip: "10.0.3.12", type: "read",   minsAgo: 22 },
+    { id: "adt_008h8i9j0k1l2m3n4o5p6q", user: "Investigator B", action: "Ran Search",             resource: "Query: Hackyboy", ip: "10.0.2.33", type: "search", minsAgo: 27 },
+    { id: "adt_009i9j0k1l2m3n4o5p6q7r", user: "System",         action: "Alert Generated",        resource: "ALT-089",      ip: "Internal",  type: "system", minsAgo: 31 },
+    { id: "adt_010j0k1l2m3n4o5p6q7r8s", user: "Investigator A", action: "Viewed Network Graph",   resource: "N-042",        ip: "10.0.1.47", type: "read",   minsAgo: 34 },
+  ]
+  for (const entry of auditLogSeeds) {
+    await prisma.auditLogEntry.upsert({
+      where: { id: entry.id },
+      update: {},
+      create: {
+        id: entry.id,
+        user: entry.user,
+        action: entry.action,
+        resource: entry.resource,
+        ip: entry.ip,
+        type: entry.type,
+        status: "Success",
+        createdAt: new Date(Date.now() - entry.minsAgo * 60 * 1000),
+      },
+    })
+  }
+
+  console.log('Audit log entries created: 10')
   console.log('Seed complete.')
 }
 
