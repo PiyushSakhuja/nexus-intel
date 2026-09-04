@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { getIo } from "../sockets/io.js";
+import { computeSimulateScoreDelta } from "../lib/riskEngine.js";
 
 export const simulateRouter = Router();
 
@@ -47,8 +48,12 @@ simulateRouter.post("/event", async (req, res) => {
     emit("correlation", { entity: entity.alias, confidence: entity.confidence });
   }
 
-  // 3. Risk bump (deterministic, explainable — not random magic)
-  const scoreDelta = 4 + Math.floor(Math.random() * 6); // +4 to +9
+  // 3. Risk bump — deterministic function of the correlated entity's own
+  // (already-computed, stored) risk and confidence. See
+  // riskEngine.ts#computeSimulateScoreDelta for the exact formula.
+  const { delta: scoreDelta, explanation: deltaExplanation } = computeSimulateScoreDelta(
+    entity ? { risk: entity.risk, confidence: entity.confidence } : null
+  );
   const newNetworkRisk = Math.min(100, network.risk + scoreDelta);
   const status = newNetworkRisk >= 80 ? "CRITICAL" : newNetworkRisk >= 60 ? "HIGH" : newNetworkRisk >= 30 ? "MEDIUM" : "LOW";
 
@@ -56,7 +61,7 @@ simulateRouter.post("/event", async (req, res) => {
     data: {
       entityId: entity?.id,
       type: chosen.type,
-      description: chosen.description,
+      description: `${chosen.description} — ${deltaExplanation}`,
       scoreDelta,
     },
   });

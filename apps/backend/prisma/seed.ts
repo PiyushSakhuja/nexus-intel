@@ -1,4 +1,5 @@
 import { PrismaClient, SourceAccess } from '@prisma/client'
+import { scoreListings, signalsToDisplayStrings } from '../src/lib/riskEngine.js'
 
 const prisma = new PrismaClient()
 
@@ -3028,6 +3029,34 @@ async function main() {
   })
 
   console.log('Listings created: 120')
+
+  // ─── Risk scoring (Risk Engine) ──────────────────────────────────────────
+  // The `risk`/`signals` values set on the upserts above are seed-time
+  // placeholders only. Here we overwrite them with the output of the real
+  // scorer (apps/backend/src/lib/riskEngine.ts) run once against the full
+  // just-seeded listing population, so riskEngine.ts stays the single
+  // source of truth for both the seed data and the live API
+  // (see routes/misc.ts, which recomputes the same way at request time).
+  const listingsForScoring = await prisma.listing.findMany({
+    select: {
+      id: true,
+      category: true,
+      title: true,
+      priceUsd: true,
+      marketplace: true,
+      vendorAlias: true,
+      firstSeen: true,
+      lastSeen: true,
+    },
+  })
+  const scoredListings = scoreListings(listingsForScoring)
+  for (const [id, result] of scoredListings) {
+    await prisma.listing.update({
+      where: { id },
+      data: { risk: result.score, signals: signalsToDisplayStrings(result.signals) },
+    })
+  }
+  console.log(`Listings risk-scored via riskEngine: ${scoredListings.size}`)
 
   // ─── Alerts ─────────────────────────────────────────────────────────────────
   // NOTE: this table was previously never seeded, so GET /api/alerts correctly
