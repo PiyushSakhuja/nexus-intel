@@ -196,6 +196,11 @@ CREATE TABLE "Listing" (
     "firstSeen" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "lastSeen" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "status" TEXT NOT NULL,
+    "marketplace" TEXT,
+    "vendorAlias" TEXT,
+    "title" TEXT,
+    "priceUsd" DOUBLE PRECISION,
+    "shipsFrom" TEXT,
     "sourceId" TEXT,
 
     CONSTRAINT "Listing_pkey" PRIMARY KEY ("id")

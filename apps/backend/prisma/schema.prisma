@@ -243,17 +243,23 @@ model Wallet {
 }
 
 model Listing {
-  id         String   @id @default(cuid())
-  displayId  String   @unique // "REC-1024"
-  category   String
-  risk       Int
-  signals    Json     // string[] of detected patterns
-  firstSeen  DateTime @default(now())
-  lastSeen   DateTime @default(now())
-  status     String   // "Flagged" | "Under Review" | "Monitoring" | "Clear"
+  id          String   @id @default(cuid())
+  displayId   String   @unique // "REC-1024"
+  category    String
+  risk        Int
+  signals     Json     // string[] of detected patterns
+  firstSeen   DateTime @default(now())
+  lastSeen    DateTime @default(now())
+  status      String   // "Flagged" | "Under Review" | "Monitoring" | "Clear"
 
-  sourceId   String?
-  source     Source?  @relation(fields: [sourceId], references: [id])
+  marketplace String?  // "Hansa" | "Valhalla"
+  vendorAlias String?  // matches Entity.alias for the listing's vendor
+  title       String?  @db.Text
+  priceUsd    Float?
+  shipsFrom   String?
+
+  sourceId    String?
+  source      Source?  @relation(fields: [sourceId], references: [id])
 }
 
 // ─── Network graph (visual relationship map) ────────────────────────────────
