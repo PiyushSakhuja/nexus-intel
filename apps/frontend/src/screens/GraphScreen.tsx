@@ -194,12 +194,38 @@ export function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) 
           </div>
 
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-            {[{label:"Connections",val:"14"},{label:"Transactions",val:"37"},{label:"Associated",val:"6"},{label:"Risk Δ",val:"+29"}].map(item=>(
-              <div key={item.label} style={{background:"rgba(255,255,255,0.04)",borderRadius:8,padding:"10px 8px",textAlign:"center"}}>
-                <div className="display" style={{fontSize:19,fontWeight:700,color:"var(--text-1)"}}>{item.val}</div>
-                <div style={{fontSize:10,color:"var(--text-4)",marginTop:2}}>{item.label}</div>
-              </div>
-            ))}
+            {(() => {
+              // All derived live from connectedEdges/liveNodes — no mock data, no extra API call.
+              const others = connectedEdges
+                .map(e => liveNodes.find(n => n.id === (e.from===selNode.id ? e.to : e.from)))
+                .filter(Boolean) as any[];
+              const txnCount = others.filter(n => n.type === "txn").length;
+              const associatedCount = connectedEdges.filter(e =>
+                (e.label ?? "").toLowerCase().includes("associated")
+              ).length;
+              const riskiest = others.length
+                ? others.reduce((a,b)=> (b.risk ?? 0) > (a.risk ?? 0) ? b : a)
+                : null;
+
+              const stats = [
+                {label:"Connections", val: String(connectedEdges.length)},
+                {label:"Transactions", val: String(txnCount)},
+                {label:"Associated", val: String(associatedCount)},
+                {
+                  label:"Riskiest Link",
+                  val: riskiest ? String(riskiest.risk) : "—",
+                  color: riskiest ? riskColorLight(riskiest.risk) : undefined,
+                  title: riskiest ? riskiest.label : undefined,
+                },
+              ];
+
+              return stats.map(item=>(
+                <div key={item.label} title={item.title} style={{background:"rgba(255,255,255,0.04)",borderRadius:8,padding:"10px 8px",textAlign:"center"}}>
+                  <div className="display" style={{fontSize:19,fontWeight:700,color:item.color ?? "var(--text-1)"}}>{item.val}</div>
+                  <div style={{fontSize:10,color:"var(--text-4)",marginTop:2}}>{item.label}</div>
+                </div>
+              ));
+            })()}
           </div>
 
           {/* Connected nodes */}
