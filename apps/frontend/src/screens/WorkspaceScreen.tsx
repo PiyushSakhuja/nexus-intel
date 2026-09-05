@@ -23,6 +23,183 @@ import { getSocket, EVENT_META } from "../lib/socket";
 // unchanged; only screens explicitly wired to the API override this.
 const entities = mockEntities;
 
+// -- Model options (keep in sync with backend/src/lib/llmClient.ts) ----------
+// llama-3.3-70b-versatile and llama-3.1-8b-instant were decommissioned by
+// Groq on 2026-08-16 (deprecated 2026-06-17) — see
+// https://console.groq.com/docs/deprecations. Requests using them 404.
+// Replaced here with Groq's recommended migrations: openai/gpt-oss-20b and
+// qwen/qwen3.6-27b.
+type SupportedModel =
+  | "openai/gpt-oss-120b"
+  | "openai/gpt-oss-20b"
+  | "qwen/qwen3.6-27b"
+  | "gemini-flash-2.5-lite"
+  | "gemini-flash-2.5"
+  | "gemini-flash-3.1-lite";
+
+interface ModelOption {
+  value: SupportedModel;
+  label: string;
+  group: string;
+  note: string;
+  badge: "groq" | "gemini";
+}
+
+const MODEL_OPTIONS: ModelOption[] = [
+  { value: "openai/gpt-oss-120b",     label: "GPT-OSS 120B",          group: "Grok",   note: "~500 t/s · best quality",          badge: "groq"   },
+  { value: "openai/gpt-oss-20b",      label: "GPT-OSS 20B",           group: "Grok",   note: "~1000 t/s · fastest",               badge: "groq"   },
+  { value: "qwen/qwen3.6-27b",        label: "Qwen 3.6 27B",          group: "Qwen",   note: "Groq's Llama 3.3 70B replacement",  badge: "groq"   },
+  { value: "gemini-flash-2.5-lite",   label: "Gemini Flash 2.5 Lite", group: "Gemini", note: "free tier",               badge: "gemini" },
+  { value: "gemini-flash-2.5",        label: "Gemini Flash 2.5",      group: "Gemini", note: "free tier",               badge: "gemini" },
+  { value: "gemini-flash-3.1-lite",   label: "Gemini Flash 3.1 Lite", group: "Gemini", note: "stable GA",               badge: "gemini" },
+];
+
+const DEFAULT_MODEL: SupportedModel = "openai/gpt-oss-120b";
+
+// Custom model picker — groups by provider, shows speed/tier notes inline.
+function ModelPicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: SupportedModel;
+  onChange: (m: SupportedModel) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = { current: null as HTMLDivElement | null };
+  const selected = MODEL_OPTIONS.find(m => m.value === value) ?? MODEL_OPTIONS[0];
+
+  // Close on outside click
+  const handleBlur = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false);
+  };
+
+  const groups = ["Grok", "Llama", "Gemini"];
+  const BADGE_COLORS: Record<string, { bg: string; color: string; dot: string }> = {
+    groq:   { bg: "rgba(99,102,241,0.15)",  color: "var(--accent-hi)",    dot: "var(--accent-hi)"    },
+    gemini: { bg: "rgba(16,185,129,0.15)",  color: "#10b981",             dot: "#10b981"             },
+  };
+
+  const bc = BADGE_COLORS[selected.badge];
+
+  return (
+    <div
+      style={{ position: "relative" }}
+      onBlur={handleBlur}
+      tabIndex={-1}
+    >
+      {/* Trigger */}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "8px 10px",
+          background: open ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.04)",
+          border: `1px solid ${open ? "var(--accent)" : "var(--border)"}`,
+          borderRadius: 8,
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.5 : 1,
+          transition: "border-color 0.15s, background 0.15s",
+          textAlign: "left",
+        }}
+      >
+        {/* Provider dot */}
+        <span style={{ width: 7, height: 7, borderRadius: "50%", background: bc.dot, flexShrink: 0, boxShadow: `0 0 5px ${bc.dot}` }} />
+        {/* Label */}
+        <span style={{ flex: 1, fontSize: 12, fontWeight: 500, color: "var(--text-1)", fontFamily: "JetBrains Mono,monospace" }}>
+          {selected.label}
+        </span>
+        {/* Speed note */}
+        <span style={{ fontSize: 10.5, color: "var(--text-4)", flexShrink: 0 }}>{selected.note}</span>
+        {/* Chevron */}
+        <span style={{ fontSize: 9, color: "var(--text-4)", flexShrink: 0, transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>▼</span>
+      </button>
+
+      {/* Dropdown panel */}
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            right: 0,
+            background: "var(--surface, #16181d)",
+            border: "1px solid var(--border)",
+            borderRadius: 10,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+            zIndex: 50,
+            overflow: "hidden",
+          }}
+        >
+          {groups.map((group, gi) => {
+            const opts = MODEL_OPTIONS.filter(m => m.group === group);
+            if (!opts.length) return null;
+            return (
+              <div key={group}>
+                {/* Group header */}
+                <div style={{
+                  padding: "7px 12px 4px",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  color: "var(--text-4)",
+                  textTransform: "uppercase",
+                  borderTop: gi > 0 ? "1px solid var(--border)" : "none",
+                  background: "rgba(255,255,255,0.02)",
+                }}>
+                  {group}
+                </div>
+                {/* Options */}
+                {opts.map(opt => {
+                  const bc2 = BADGE_COLORS[opt.badge];
+                  const isActive = opt.value === value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      tabIndex={0}
+                      onClick={() => { onChange(opt.value); setOpen(false); }}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 9,
+                        padding: "8px 12px",
+                        background: isActive ? "rgba(99,102,241,0.12)" : "transparent",
+                        border: "none",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        transition: "background 0.1s",
+                      }}
+                      onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.05)"; }}
+                      onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                    >
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: bc2.dot, flexShrink: 0 }} />
+                      <span style={{ flex: 1, fontSize: 12, color: isActive ? "var(--accent-hi)" : "var(--text-1)", fontFamily: "JetBrains Mono,monospace", fontWeight: isActive ? 600 : 400 }}>
+                        {opt.label}
+                      </span>
+                      <span style={{ fontSize: 10.5, color: "var(--text-4)" }}>{opt.note}</span>
+                      {isActive && <span style={{ fontSize: 10, color: "var(--accent-hi)" }}>✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
 export function WorkspaceScreen({
   navigate,
   displayId,
@@ -34,8 +211,6 @@ export function WorkspaceScreen({
   const [accepted, setAccepted] = useState(false);
 
   // ─── Real investigation data ────────────────────────────────────────────
-  // Falls back to the demo array (and shows a banner) if the API can't be
-  // reached, or while we don't yet know which investigation to load.
   const [inv, setInv] = useState<any>(investigations[0]);
   const [invLoading, setInvLoading] = useState(true);
   const [invError, setInvError] = useState<string | null>(null);
@@ -46,10 +221,6 @@ export function WorkspaceScreen({
     setInvError(null);
 
     const load = async () => {
-      // No specific case was passed in (e.g. navigated here from a screen
-      // that doesn't carry an investigation) — fall back to the most
-      // recently updated real investigation so the workspace still shows
-      // live data instead of only ever the mock case.
       let targetId = displayId;
       if (!targetId) {
         const listRes = await fetch("http://localhost:4000/api/investigations");
@@ -75,7 +246,6 @@ export function WorkspaceScreen({
         updated: data.updatedAt ? new Date(data.updatedAt).toLocaleString() : data.updated ?? "",
         description: data.description ?? "",
         relatedEntities: (data.entities ?? []).map((ie: any) => ie.entity),
-        // AiAssessment rows come back newest-first (see GET /:displayId).
         latestAssessment: data.aiAssessments?.[0] ?? null,
       });
     };
@@ -88,12 +258,10 @@ export function WorkspaceScreen({
   }, [displayId]);
 
   // ─── AI Assessment ───────────────────────────────────────────────────────
-  // Signals -> Gemini -> explanation -> stored -> displayed. The button
-  // below triggers the whole pipeline server-side; we just render whatever
-  // comes back (or whatever's already stored on the investigation).
   const [assessment, setAssessment] = useState<any>(null);
   const [assessLoading, setAssessLoading] = useState(false);
   const [assessError, setAssessError] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState<SupportedModel>(DEFAULT_MODEL);
 
   useEffect(() => {
     setAssessment(inv?.latestAssessment ?? null);
@@ -104,7 +272,11 @@ export function WorkspaceScreen({
     setAssessLoading(true);
     setAssessError(null);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/ai-assessment`, { method: "POST" });
+      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/ai-assessment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: selectedModel }),
+      });
       if (!res.ok) throw new Error(`API ${res.status}`);
       const data = await res.json();
       setAssessment(data);
@@ -118,8 +290,6 @@ export function WorkspaceScreen({
 
   const recommendations: string[] = (() => {
     if (!assessment?.recommendedNext) {
-      // Fallback sample recommendations when nothing has been generated yet
-      // (kept so the panel isn't empty on first load with demo data).
       return assessment
         ? []
         : [
@@ -244,6 +414,12 @@ export function WorkspaceScreen({
               )}
             </div>
 
+            {/* Model picker */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10.5, color: "var(--text-4)", marginBottom: 5, letterSpacing: "0.04em" }}>MODEL</div>
+              <ModelPicker value={selectedModel} onChange={setSelectedModel} disabled={assessLoading} />
+            </div>
+
             {!assessment && (
               <>
                 <div style={{ fontSize: 12, color: "var(--text-3)", lineHeight: 1.65, marginBottom: 14 }}>
@@ -279,13 +455,20 @@ export function WorkspaceScreen({
 
             {assessment && (
               <>
+                {/* Model used badge */}
+                {assessment.modelUsed && assessment.modelUsed !== "fallback" && (
+                  <div style={{ fontSize: 10.5, color: "var(--text-4)", marginBottom: 10 }}>
+                    Generated by <span style={{ color: "var(--accent-hi)", fontFamily: "JetBrains Mono,monospace" }}>{assessment.modelUsed}</span>
+                  </div>
+                )}
+
                 <div style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.65, marginBottom: 12 }}>
                   {assessment.explanation}
                 </div>
 
                 {assessment.aiGenerated === false && (
                   <div style={{ fontSize: 10.5, color: "var(--text-4)", marginBottom: 12 }}>
-                    Gemini was unreachable when this ran — showing a deterministic fallback summary instead of a generated narrative.
+                    The selected model was unreachable — showing a deterministic fallback summary instead of a generated narrative.
                   </div>
                 )}
 
