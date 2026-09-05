@@ -112,11 +112,21 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
   }, [feedEvents.length]);
 
   // ── Simulate button handler ──────────────────────────────────────────────
+  // Deliberately targets N-018, NOT liveNetworks[0]. liveNetworks[0] is
+  // sorted by risk descending, so it's almost always the network that's
+  // ALREADY at/above the CRITICAL threshold (N-042, seeded at 91) — and the
+  // backend only fires an alert on the moment risk CROSSES the threshold,
+  // not just because it's already above it. Targeting the already-critical
+  // network means clicking Simulate does nothing visible, forever.
+  // N-018 (seeded 78) is the highest-risk network still below threshold,
+  // and with the risk engine's per-click delta for its lead entity (+6,
+  // deterministic as of the entityRisk/vendorRisk rework), it crosses 80
+  // on the FIRST click, guaranteed, every time. Verified against the real
+  // scoring code + real seed data, not assumed.
   const handleSimulate = async () => {
     setSimulating(true);
     try {
-      // Pick the first network from liveNetworks; fall back to N-018
-      const targetNetwork = liveNetworks[0]?.id ?? "N-018";
+      const targetNetwork = "N-018";
       await fetch("http://localhost:4000/api/simulate/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
