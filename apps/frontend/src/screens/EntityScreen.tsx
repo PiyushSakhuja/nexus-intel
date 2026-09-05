@@ -1,31 +1,65 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
-import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
+  riskColorLight, riskLabel, caseTimeline,
+  type Entity,
 } from "../data";
 import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
+  RingScore, RiskBadge,
   PulseIndicator, BarContrib, TimelineView,
 } from "../components/shared";
-import { getSocket, EVENT_META } from "../lib/socket";
 
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+// Readable labels for the backend's CorrelationSignal enum — presentation
+// only, doesn't change the underlying signal identifiers.
+const SIGNAL_LABELS: Record<string, string> = {
+  normalized_vendor_alias: "Normalized vendor alias",
+  listing_volume: "Listing volume",
+  title_similarity: "Title similarity",
+  category_consistency: "Category consistency",
+  cross_marketplace: "Cross-marketplace presence",
+  temporal_consistency: "Temporal consistency",
+  shipping_location_consistency: "Shipping location consistency",
+};
+const SIGNAL_COLORS = ["#dc2626", "#ea580c", "#d97706", "#6366f1", "#8b5cf6", "#06b6d4", "#16a34a"];
 
 export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s:string,d?:any)=>void }) {
   const [tab, setTab] = useState("Overview");
   const tabs = ["Overview","Relationships","Activity","Evidence","Timeline"];
+
+  // The prop may come from a screen already wired to the API (real
+  // displayId) or from a screen still on demo data (mock "ENT-xxx" id) —
+  // either way we try the real endpoint and fall back to whatever was
+  // passed in if it can't be found.
+  const displayId: string | undefined = (entity as any)?.displayId ?? entity?.id;
+
+  const [live, setLive] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!displayId) { setLoading(false); return; }
+    setLoading(true);
+    fetch(`http://localhost:4000/api/entities/${encodeURIComponent(displayId)}`)
+      .then(res => { if (!res.ok) throw new Error(`API returned ${res.status}`); return res.json(); })
+      .then(data => { setLive(data); setError(null); })
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [displayId]);
+
+  // `source` is only used for cosmetic/demo fields (alias, firstSeen, mock
+  // identifiers) when the live fetch hasn't resolved — it never backs the
+  // risk/confidence numbers shown below.
+  const source: any = live ?? entity;
+  const computed = live?.computed ?? null;
+  const correlation = live?.correlation ?? null;
+
+  // Authoritative values: computed.* when we have live data (may be null —
+  // "not calculable" — and should be shown as such), otherwise the mock
+  // entity's numbers as a clearly-labeled fallback.
+  const risk: number | null = live?.computed?.risk ?? null;
+  const confidence: number | null = live?.computed?.confidence ?? null;
+  const riskChange: number | null = live ? null : null; // computed.riskChange is always null — never calculable per-entity
+
+  const dash = (v: number | string | null | undefined) => (v === null || v === undefined || v === "" ? "—" : v);
 
   return (
     <div style={{padding:"26px 28px"}}>
@@ -34,19 +68,19 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
           <button onClick={()=>navigate("entities")} style={{background:"none",border:"none",color:"var(--text-3)",cursor:"pointer",fontSize:12,padding:0}}>← Entities</button>
           <span style={{color:"var(--text-4)"}}>/</span>
-          <span style={{fontSize:12,color:"var(--text-3)"}}>{entity.alias}</span>
+          <span style={{fontSize:12,color:"var(--text-3)"}}>{source.alias}</span>
         </div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
           <div>
             <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
-              <h1 className="section-head display" style={{fontSize:24}}>{entity.alias}</h1>
-              <RiskBadge score={entity.risk}/>
+              <h1 className="section-head display" style={{fontSize:24}}>{source.alias}</h1>
+              {risk != null && <RiskBadge score={risk}/>}
             </div>
-            <div style={{display:"flex",gap:18,fontSize:12,color:"var(--text-3)"}}>
-              <span>First seen: <span style={{color:"var(--text-2)"}}>{entity.firstSeen}</span></span>
-              <span>Last seen: <span style={{color:"var(--text-2)"}}>{entity.lastSeen}</span></span>
-              <span>Risk change: <span style={{color:"var(--low-light)"}}>+{entity.riskChange} pts</span></span>
-              <span>Confidence: <span style={{color:"var(--text-2)"}}>{entity.confidence}%</span></span>
+            <div style={{display:"flex",gap:18,fontSize:12,color:"var(--text-3)",flexWrap:"wrap"}}>
+              <span>First seen: <span style={{color:"var(--text-2)"}}>{dash(source.firstSeen ? (new Date(source.firstSeen).toString()!=="Invalid Date" ? new Date(source.firstSeen).toLocaleDateString() : source.firstSeen) : null)}</span></span>
+              <span>Last seen: <span style={{color:"var(--text-2)"}}>{dash(source.lastSeen ? (new Date(source.lastSeen).toString()!=="Invalid Date" ? new Date(source.lastSeen).toLocaleDateString() : source.lastSeen) : null)}</span></span>
+              <span>Risk change: <span style={{color:"var(--text-2)"}}>{riskChange != null ? `+${riskChange} pts` : "Not calculated"}</span></span>
+              <span>Confidence: <span style={{color:"var(--text-2)"}}>{confidence != null ? `${confidence}%` : "Not calculated"}</span></span>
             </div>
           </div>
           <div style={{display:"flex",gap:8}}>
@@ -55,6 +89,8 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
             <button className="btn btn-ghost" onClick={()=>navigate("reports")}>Generate Report</button>
           </div>
         </div>
+        {loading && <p className="page-sub" style={{marginTop:10}}>Loading live entity data…</p>}
+        {error && <p className="page-sub" style={{marginTop:10,color:"var(--high-light)"}}>Couldn't reach the API ({error}) — risk and confidence are unavailable.</p>}
       </div>
 
       {/* Tabs */}
@@ -69,49 +105,70 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
             {/* Ring score */}
             <div className="card" style={{padding:22,textAlign:"center"}}>
               <div style={{fontSize:10.5,color:"var(--text-3)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:16}}>Risk Assessment</div>
-              <div style={{display:"flex",justifyContent:"center",marginBottom:12}}><RingScore score={entity.risk} size={140}/></div>
-              <div style={{fontSize:13,fontWeight:700,color:riskColorLight(entity.risk),marginBottom:4}}>{riskLabel(entity.risk)} RISK</div>
-              <div style={{fontSize:11,color:"var(--text-3)"}}>Confidence: {entity.confidence}%</div>
+              <div style={{display:"flex",justifyContent:"center",marginBottom:12}}>
+                {risk != null
+                  ? <RingScore score={risk} size={140}/>
+                  : <div style={{width:140,height:140,borderRadius:"50%",border:"1px dashed var(--border)",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-4)",fontSize:12}}>Not calculated</div>}
+              </div>
+              <div style={{fontSize:13,fontWeight:700,color:risk!=null?riskColorLight(risk):"var(--text-4)",marginBottom:4}}>{risk!=null?`${riskLabel(risk)} RISK`:"RISK NOT CALCULATED"}</div>
+              <div style={{fontSize:11,color:"var(--text-3)"}}>Confidence: {confidence != null ? `${confidence}%` : "Not calculated"}</div>
             </div>
 
-            {/* Risk dimensions */}
+            {/* Evidence behind the score — real backend evidence counts, not fabricated dimension scores */}
             <div className="card" style={{padding:18}}>
-              <div style={{fontSize:12,fontWeight:600,color:"var(--text-1)",marginBottom:14}}>Risk Dimensions</div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                {[
-                  {label:"Entity",score:entity.risk},
-                  {label:"Relationship",score:79},
-                  {label:"Network",score:91},
-                  {label:"Temporal",score:68},
-                ].map(r=>(
-                  <div key={r.label} style={{textAlign:"center",background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"12px 6px"}}>
-                    <RingScore score={r.score} size={68}/>
-                    <div style={{fontSize:10,color:"var(--text-4)",marginTop:4}}>{r.label}</div>
+              <div style={{fontSize:12,fontWeight:600,color:"var(--text-1)",marginBottom:14}}>Evidence Behind This Score</div>
+              {computed?.evidence ? (
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  {[
+                    {label:"Listings", val:computed.evidence.listingCount},
+                    {label:"Marketplaces", val:computed.evidence.marketplaceCount},
+                    {label:"High-Risk Categories", val:computed.evidence.highRiskCategoryCount},
+                  ].map(r=>(
+                    <div key={r.label} style={{textAlign:"center",background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"14px 6px"}}>
+                      <div className="display" style={{fontSize:22,fontWeight:700,color:"var(--text-1)"}}>{r.val}</div>
+                      <div style={{fontSize:10,color:"var(--text-4)",marginTop:4}}>{r.label}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{fontSize:12,color:"var(--text-4)"}}>
+                  {live ? "No listing evidence correlates to this entity's alias — risk is not calculable." : "Not calculated."}
+                </div>
+              )}
+              {source.network && (
+                <div style={{marginTop:14,padding:"9px 12px",background:"rgba(99,102,241,0.07)",border:"1px solid rgba(99,102,241,0.18)",borderRadius:8}}>
+                  <div style={{fontSize:11,color:"var(--accent-hi)",fontWeight:600}}>
+                    Network {source.network.displayId ?? "—"}: persisted risk {dash(source.network.risk)} {source.network.status ? `(${source.network.status})` : ""}
                   </div>
-                ))}
-              </div>
-              <div style={{marginTop:14,padding:"9px 12px",background:"rgba(99,102,241,0.07)",border:"1px solid rgba(99,102,241,0.18)",borderRadius:8}}>
-                <div style={{fontSize:11,color:"var(--accent-hi)",fontWeight:600}}>Overall Network Risk: 91</div>
-              </div>
+                </div>
+              )}
             </div>
 
-            {/* Cross-source resolution */}
+            {/* Correlation — explicitly NOT identity resolution */}
             <div className="card" style={{padding:18}}>
-              <div style={{fontSize:10.5,color:"var(--accent-hi)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:12}}>Cross-Source Entity Resolution</div>
+              <div style={{fontSize:10.5,color:"var(--accent-hi)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Alias Correlation</div>
+              <div style={{fontSize:10,color:"var(--text-4)",marginBottom:12}}>Conservative multi-signal correlation across listings — not full identity resolution.</div>
               <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {entity.identifiers.map(id=>(
+                {(source.identifiers ?? []).map((id:any)=>(
                   <div key={id.type} style={{background:"rgba(255,255,255,0.03)",borderRadius:7,padding:"9px 12px"}}>
                     <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
                       <span style={{fontSize:10,color:"var(--text-4)"}}>{id.type}</span>
-                      <span style={{fontSize:10,color:"var(--low-light)",fontWeight:600}}>{id.confidence}%</span>
+                      <span style={{fontSize:10,color:"var(--low-light)",fontWeight:600}}>{id.confidence != null ? `${id.confidence}%` : "—"}</span>
                     </div>
                     <div className="mono-sm" style={{color:"var(--text-2)"}}>{id.value}</div>
                   </div>
                 ))}
               </div>
-              <div style={{marginTop:12,padding:"9px 12px",background:"rgba(99,102,241,0.08)",borderRadius:7,border:"1px solid rgba(99,102,241,0.22)"}}>
-                <div style={{fontSize:11,color:"var(--accent-hi)",fontWeight:700}}>Potential Entity Match — 93% confidence</div>
-              </div>
+              {correlation && (
+                <div style={{marginTop:12,padding:"9px 12px",background:"rgba(99,102,241,0.08)",borderRadius:7,border:"1px solid rgba(99,102,241,0.22)"}}>
+                  <div style={{fontSize:11,color:"var(--accent-hi)",fontWeight:700}}>
+                    Correlation confidence — {correlation.confidence}% ({correlation.correlatedListings} correlated listing{correlation.correlatedListings===1?"":"s"})
+                  </div>
+                  {correlation.marketplaces?.length > 0 && (
+                    <div style={{fontSize:10,color:"var(--text-3)",marginTop:4}}>Marketplaces: {correlation.marketplaces.join(", ")}</div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -123,20 +180,37 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
                 <PulseIndicator color="var(--critical)"/>
                 <div style={{fontSize:14,fontWeight:700,color:"var(--text-1)"}}>Why Was This Entity Flagged?</div>
               </div>
-              {flagContributions.map(c=>(
-                <BarContrib key={c.label} label={c.label} value={c.value} color={c.color}/>
-              ))}
-              <div className="divider" style={{margin:"16px 0"}}/>
-              <div style={{background:"rgba(255,255,255,0.03)",borderRadius:9,padding:"14px 16px",borderLeft:"3px solid var(--accent)",marginBottom:14}}>
-                <div style={{fontSize:12.5,color:"var(--text-2)",lineHeight:1.65}}>
-                  "Risk increased due to repeated identifiers across multiple intelligence sources, association with high-risk network entities, and an abnormal activity pattern consistent with coordinated behaviour over a 4-day window."
+
+              {correlation?.signalDetails?.length > 0 ? (
+                correlation.signalDetails.map((s:any,i:number)=>(
+                  <BarContrib
+                    key={s.signal}
+                    label={SIGNAL_LABELS[s.signal] ?? s.signal}
+                    value={s.points}
+                    max={Math.max(20, ...correlation.signalDetails.map((d:any)=>d.points))}
+                    color={SIGNAL_COLORS[i % SIGNAL_COLORS.length]}
+                  />
+                ))
+              ) : (
+                <div style={{fontSize:12,color:"var(--text-4)",marginBottom:14}}>
+                  {live ? "No correlation signals matched for this entity." : "Loading correlation signals…"}
                 </div>
-              </div>
+              )}
+
+              <div className="divider" style={{margin:"16px 0"}}/>
+
+              {(computed?.explanation || correlation?.explanation) && (
+                <div style={{background:"rgba(255,255,255,0.03)",borderRadius:9,padding:"14px 16px",borderLeft:"3px solid var(--accent)",marginBottom:14}}>
+                  {computed?.explanation && <div style={{fontSize:12.5,color:"var(--text-2)",lineHeight:1.65}}>{computed.explanation}</div>}
+                  {correlation?.explanation && <div style={{fontSize:12.5,color:"var(--text-3)",lineHeight:1.65,marginTop:computed?.explanation?8:0}}>{correlation.explanation}</div>}
+                </div>
+              )}
+
               <div className="ai-strip">
                 <span style={{color:"var(--medium-light)",fontSize:14}}>⚠</span>
                 <div>
-                  <div style={{fontSize:10.5,color:"var(--medium-light)",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.07em"}}>AI-Generated Assessment — Investigator Review Required</div>
-                  <div style={{fontSize:11,color:"var(--text-3)",marginTop:2}}>This assessment is generated by automated analysis. No AI output constitutes a criminal determination. All decisions require investigator review.</div>
+                  <div style={{fontSize:10.5,color:"var(--medium-light)",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.07em"}}>Automated Risk Assessment — Investigator Review Required</div>
+                  <div style={{fontSize:11,color:"var(--text-3)",marginTop:2}}>This assessment is generated by deterministic backend analysis of listing evidence, not a criminal determination. All decisions require investigator review.</div>
                 </div>
               </div>
             </div>
@@ -144,7 +218,7 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
             {/* Action buttons */}
             <div style={{display:"flex",gap:10}}>
               <button className="btn btn-primary" style={{flex:1,justifyContent:"center"}} onClick={()=>navigate("graph")}>View Network Graph</button>
-              <button className="btn btn-ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>navigate("network-risk")}>Network Risk Analysis</button>
+              <button className="btn btn-ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>navigate("network-risk", source.network?.displayId ?? undefined)}>Network Risk Analysis</button>
               <button className="btn btn-ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>navigate("evidence")}>Evidence</button>
             </div>
 
@@ -153,10 +227,10 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
               <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:14}}>Activity Summary</div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
                 {[
-                  {label:"Marketplaces",val:entity.marketplaces,icon:"▤"},
-                  {label:"Wallets",val:entity.wallets,icon:"◇"},
-                  {label:"Listings",val:entity.listings,icon:"▣"},
-                  {label:"Comm IDs",val:entity.comms,icon:"◉"},
+                  {label:"Marketplaces",val: live ? (correlation?.marketplaces?.length ?? "—") : source.marketplaces,icon:"▤"},
+                  {label:"Wallets",val: live ? "—" : source.wallets,icon:"◇"},
+                  {label:"Listings",val: live ? (correlation?.correlatedListings ?? "—") : source.listings,icon:"▣"},
+                  {label:"Comm IDs",val: live ? "—" : source.comms,icon:"◉"},
                 ].map(item=>(
                   <div key={item.label} style={{textAlign:"center",background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"12px 8px"}}>
                     <div style={{fontSize:18,color:"var(--text-4)",marginBottom:4}}>{item.icon}</div>
