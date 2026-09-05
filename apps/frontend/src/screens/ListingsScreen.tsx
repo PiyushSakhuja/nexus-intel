@@ -1,0 +1,145 @@
+import { useState, useEffect, useRef } from "react";
+import {
+  AreaChart, Area, LineChart, Line, BarChart, Bar,
+  PieChart, Pie, Cell, XAxis, YAxis,
+  CartesianGrid, Tooltip, ResponsiveContainer,
+} from "recharts";
+import {
+  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
+  activityTimeline, riskDistribution, networkRiskEvolution,
+  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
+  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
+  investigations, evidenceRecords, graphNodes, graphEdges,
+  auditLog, flagContributions, networkSignals, caseTimeline,
+  type Entity, type Alert, type Investigation, type EvidenceRecord,
+} from "../data";
+import {
+  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
+  PulseIndicator, BarContrib, TimelineView,
+} from "../components/shared";
+import { getSocket, EVENT_META } from "../lib/socket";
+
+// Kept so every screen still reading the hardcoded demo array works
+// unchanged; only screens explicitly wired to the API override this.
+const entities = mockEntities;
+
+export function ListingsScreen() {
+  const [rows, setRows] = useState<any[]>(listings);
+  const [sel, setSel] = useState<any|null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string|null>(null);
+
+  useEffect(() => {
+    fetch("http://localhost:4000/api/listings")
+      .then(res => { if (!res.ok) throw new Error(`API returned ${res.status}`); return res.json(); })
+      .then(data => { setRows(data); setError(null); })
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const fmtDate = (v:any) => {
+    if (!v) return "—";
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? String(v) : d.toLocaleDateString();
+  };
+  const signalsList = (v:any): string[] => Array.isArray(v) ? v : [];
+  const signalsLabel = (v:any) => Array.isArray(v) ? (v.length ? v.join(", ") : "—") : (v!=null ? `${v} detected` : "—");
+  const priceLabel = (v:any) => v!=null ? `$${Number(v).toFixed(2)}` : "—";
+
+  return (
+    <div style={{padding:"26px 28px"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
+        <div>
+          <h1 className="section-head">Listings Intelligence</h1>
+          <p className="page-sub">Flagged intelligence records — synthetic/demo data only. No purchase functionality.</p>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <input className="input" style={{width:200,padding:"7px 12px",fontSize:12}} placeholder="Filter records…"/>
+          <button className="btn btn-ghost btn-sm">Export</button>
+        </div>
+      </div>
+      {loading && <p className="page-sub" style={{marginBottom:12}}>Loading listings…</p>}
+      {error && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({error}) — showing demo data instead.</p>}
+      <div style={{display:"grid",gridTemplateColumns:sel?"1fr 360px":"1fr",gap:16,transition:"all 0.25s"}}>
+        <div className="card">
+          <table className="data-table">
+            <thead><tr><th>Record ID</th><th>Marketplace</th><th>Vendor</th><th>Title</th><th>Category</th><th>Risk</th><th>Price</th><th>First Seen</th><th>Last Seen</th><th>Status</th></tr></thead>
+            <tbody>
+              {rows.map(l=>(
+                <tr key={l.id} className={sel?.id===l.id?"selected":""} onClick={()=>setSel(l.id===sel?.id?null:l)}>
+                  <td><span className="mono" style={{color:"var(--accent-hi)",fontSize:12}}>{l.displayId ?? l.id}</span></td>
+                  <td>{l.marketplace ?? (typeof l.source === "string" ? l.source : l.source?.name) ?? "—"}</td>
+                  <td>{l.vendorAlias ?? "—"}</td>
+                  <td style={{maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={l.title ?? undefined}>{l.title ?? "—"}</td>
+                  <td><span className="badge badge-accent" style={{fontSize:9}}>{l.category}</span></td>
+                  <td>
+                    <div style={{display:"flex",alignItems:"center",gap:7}}>
+                      <span style={{fontWeight:700,color:riskColorLight(l.risk)}}>{l.risk}</span>
+                      <RiskBadge score={l.risk}/>
+                    </div>
+                  </td>
+                  <td>{priceLabel(l.priceUsd)}</td>
+                  <td>{fmtDate(l.firstSeen ?? l.first)}</td>
+                  <td>{fmtDate(l.lastSeen ?? l.last)}</td>
+                  <td>
+                    <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:l.status==="Flagged"||l.status==="flagged"?riskBg(80):l.status==="Under Review"?riskBg(60):l.status==="Monitoring"?riskBg(40):"rgba(255,255,255,0.04)",color:l.status==="Flagged"||l.status==="flagged"?riskColorLight(80):l.status==="Under Review"?riskColorLight(60):l.status==="Monitoring"?riskColorLight(40):"var(--text-3)",border:`1px solid ${l.status==="Flagged"||l.status==="flagged"?riskBorder(80):l.status==="Under Review"?riskBorder(60):l.status==="Monitoring"?riskBorder(40):"var(--border)"}`}}>{l.status}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {sel && (
+          <div className="card anim-slide-r" style={{padding:20,height:"fit-content"}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}>
+              <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)"}}>Record Details</div>
+              <button onClick={()=>setSel(null)} style={{background:"none",border:"none",color:"var(--text-4)",cursor:"pointer",fontSize:20,lineHeight:1}}>×</button>
+            </div>
+            <div className="mono" style={{fontSize:11,color:"var(--accent-hi)",marginBottom:4}}>{sel.displayId ?? sel.id}</div>
+            {sel.title && <div style={{fontSize:13,color:"var(--text-1)",marginBottom:12}}>{sel.title}</div>}
+            <div style={{display:"flex",justifyContent:"center",marginBottom:16}}><RingScore score={sel.risk} size={100}/></div>
+
+            {[
+              {l:"Marketplace",v:sel.marketplace ?? (typeof sel.source === "string" ? sel.source : sel.source?.name) ?? "—"},
+              {l:"Vendor",v:sel.vendorAlias ?? "—"},
+              {l:"Category",v:sel.category},
+              {l:"Risk Score",v:`${sel.risk} / 100`},
+              {l:"Price (USD)",v:priceLabel(sel.priceUsd)},
+              {l:"Ships From",v:sel.shipsFrom ?? "—"},
+              {l:"First Seen",v:fmtDate(sel.firstSeen ?? sel.first)},{l:"Last Seen",v:fmtDate(sel.lastSeen ?? sel.last)},{l:"Status",v:sel.status},
+            ].map(item=>(
+              <div key={item.l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+                <span style={{fontSize:11,color:"var(--text-4)"}}>{item.l}</span>
+                <span style={{fontSize:12,color:"var(--text-2)"}}>{item.v}</span>
+              </div>
+            ))}
+
+            {(sel.patterns ?? signalsList(sel.signals)).length>0 && (
+              <div style={{marginTop:14}}>
+                <div style={{fontSize:11,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:8}}>Detected Patterns</div>
+                {(sel.patterns ?? signalsList(sel.signals)).map((p:string)=>(
+                  <div key={p} style={{display:"flex",gap:7,alignItems:"center",marginBottom:6}}>
+                    <div style={{width:5,height:5,borderRadius:"50%",background:"var(--accent)",flexShrink:0}}/>
+                    <span style={{fontSize:12,color:"var(--text-2)"}}>{p}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {(sel.entities ?? []).length>0 && (
+              <div style={{marginTop:12}}>
+                <div style={{fontSize:11,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:8}}>Related Entities</div>
+                {sel.entities.map((e:string)=>(
+                  <span key={e} className="mono-sm" style={{display:"inline-block",margin:"0 6px 6px 0",background:"var(--accent-dim)",border:"1px solid rgba(99,102,241,0.22)",borderRadius:4,padding:"2px 8px",color:"var(--accent-hi)"}}>{e}</span>
+                ))}
+              </div>
+            )}
+
+            <button className="btn btn-primary" style={{width:"100%",justifyContent:"center",marginTop:16}}>Add to Investigation</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
