@@ -207,12 +207,24 @@ export function WorkspaceScreen({
   navigate: (s: string, d?: any) => void;
   displayId?: string | null;
 }) {
-  // ─── Investigator notes ──────────────────────────────────────────────────
-  const [note, setNote] = useState("");
-  const [noteSaving, setNoteSaving] = useState(false);
-  const [noteError, setNoteError] = useState<string | null>(null);
-  const [noteSavedAt, setNoteSavedAt] = useState<Date | null>(null);
-  const [noteDirty, setNoteDirty] = useState(false);
+  // ─── Investigator notes (multiple, editable, self-auditing) ─────────────
+  // No real auth in this app yet — mirrors the hardcoded "Investigator A"
+  // shown in the sidebar (components/Layout.tsx). Swap this for the real
+  // logged-in user once auth exists.
+  const CURRENT_USER = "Investigator A";
+
+  const [notes, setNotes] = useState<any[]>([]);
+  const [newNoteText, setNewNoteText] = useState("");
+  const [addingNote, setAddingNote] = useState(false);
+  const [addNoteError, setAddNoteError] = useState<string | null>(null);
+
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editNoteText, setEditNoteText] = useState("");
+  const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
+  const [noteActionError, setNoteActionError] = useState<string | null>(null);
+  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
 
   // ─── Real investigation data ────────────────────────────────────────────
   const [inv, setInv] = useState<any>(investigations[0]);
@@ -253,13 +265,8 @@ export function WorkspaceScreen({
         latestAssessment: data.aiAssessments?.[0] ?? null,
       });
 
-      // Seed the notes textarea from the persisted value — but only if the
-      // investigator hasn't already started typing an unsaved edit, so a
-      // background refetch never clobbers in-progress typing.
       if (!cancelled) {
-        setNote(data.notes ?? "");
-        setNoteDirty(false);
-        setNoteSavedAt(data.notesUpdatedAt ? new Date(data.notesUpdatedAt) : null);
+        setNotes(Array.isArray(data.notes) ? data.notes : []);
       }
     };
 
@@ -303,24 +310,69 @@ export function WorkspaceScreen({
     }
   };
 
-  const saveNote = async () => {
-    if (!inv?.id) return;
-    setNoteSaving(true);
-    setNoteError(null);
+  const addNote = async () => {
+    if (!inv?.id || !newNoteText.trim()) return;
+    setAddingNote(true);
+    setAddNoteError(null);
     try {
       const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/notes`, {
-        method: "PATCH",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notes: note, updatedBy: inv.assignee }),
+        body: JSON.stringify({ content: newNoteText.trim(), author: CURRENT_USER }),
       });
       if (!res.ok) throw new Error(`API ${res.status}`);
-      const data = await res.json();
-      setNoteSavedAt(data.notesUpdatedAt ? new Date(data.notesUpdatedAt) : new Date());
-      setNoteDirty(false);
+      const created = await res.json();
+      setNotes((prev) => [created, ...prev]);
+      setNewNoteText("");
     } catch (err: any) {
-      setNoteError(err.message ?? "Failed to save note");
+      setAddNoteError(err.message ?? "Failed to add note");
     } finally {
-      setNoteSaving(false);
+      setAddingNote(false);
+    }
+  };
+
+  const startEditNote = (n: any) => {
+    setEditingNoteId(n.id);
+    setEditNoteText(n.content);
+    setNoteActionError(null);
+  };
+
+  const saveNoteEdit = async (noteId: string) => {
+    if (!inv?.id || !editNoteText.trim()) return;
+    setSavingNoteId(noteId);
+    setNoteActionError(null);
+    try {
+      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/notes/${noteId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: editNoteText.trim(), author: CURRENT_USER }),
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const updated = await res.json();
+      setNotes((prev) => prev.map((n) => (n.id === noteId ? updated : n)));
+      setEditingNoteId(null);
+    } catch (err: any) {
+      setNoteActionError(err.message ?? "Failed to save changes");
+    } finally {
+      setSavingNoteId(null);
+    }
+  };
+
+  const deleteNote = async (noteId: string) => {
+    if (!inv?.id) return;
+    setDeletingNoteId(noteId);
+    setNoteActionError(null);
+    try {
+      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/notes/${noteId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok && res.status !== 204) throw new Error(`API ${res.status}`);
+      setNotes((prev) => prev.filter((n) => n.id !== noteId));
+      setConfirmDeleteId(null);
+    } catch (err: any) {
+      setNoteActionError(err.message ?? "Failed to delete note");
+    } finally {
+      setDeletingNoteId(null);
     }
   };
 
@@ -503,25 +555,132 @@ export function WorkspaceScreen({
 
           {/* Notes */}
           <div className="card" style={{ padding: 20 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)" }}>Investigator Notes</div>
-              {noteSavedAt && !noteDirty && (
-                <span style={{ fontSize: 10.5, color: "var(--text-4)" }}>Saved {noteSavedAt.toLocaleTimeString()}</span>
-              )}
-            </div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)", marginBottom: 12 }}>Investigator Notes</div>
+
+            {/* Add new note */}
             <textarea
               className="input"
-              style={{ minHeight: 80, resize: "vertical", fontSize: 12.5 }}
-              placeholder="Add investigation notes…"
-              value={note}
-              onChange={e => { setNote(e.target.value); setNoteDirty(true); }}
+              style={{ minHeight: 70, resize: "vertical", fontSize: 12.5 }}
+              placeholder="Add a note…"
+              value={newNoteText}
+              onChange={e => setNewNoteText(e.target.value)}
             />
-            {noteError && (
-              <div style={{ fontSize: 11, color: "var(--critical-light)", marginTop: 6 }}>Couldn't save ({noteError}).</div>
+            {addNoteError && (
+              <div style={{ fontSize: 11, color: "var(--critical-light)", marginTop: 6 }}>Couldn't add note ({addNoteError}).</div>
             )}
-            <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={saveNote} disabled={noteSaving || !noteDirty}>
-              {noteSaving ? "Saving…" : "Save Note"}
+            <button
+              className="btn btn-primary btn-sm"
+              style={{ marginTop: 8 }}
+              onClick={addNote}
+              disabled={addingNote || !newNoteText.trim()}
+            >
+              {addingNote ? "Adding…" : "Add Note"}
             </button>
+
+            {noteActionError && (
+              <div style={{ fontSize: 11, color: "var(--critical-light)", marginTop: 10 }}>{noteActionError}</div>
+            )}
+
+            {/* Note list — newest first, each its own little audit trail */}
+            {notes.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
+                {notes.map((n) => {
+                  const revisions = n.revisions ?? [];
+                  const isEditing = editingNoteId === n.id;
+                  const isConfirmingDelete = confirmDeleteId === n.id;
+                  const isHistoryOpen = expandedHistoryId === n.id;
+
+                  return (
+                    <div key={n.id} className="note-item">
+                      {isEditing ? (
+                        <>
+                          <textarea
+                            className="input"
+                            style={{ minHeight: 60, resize: "vertical", fontSize: 12.5 }}
+                            value={editNoteText}
+                            onChange={e => setEditNoteText(e.target.value)}
+                            autoFocus
+                          />
+                          <div style={{ display: "flex", gap: 7, marginTop: 9 }}>
+                            <button
+                              className="btn btn-primary btn-sm"
+                              onClick={() => saveNoteEdit(n.id)}
+                              disabled={savingNoteId === n.id || !editNoteText.trim()}
+                            >
+                              {savingNoteId === n.id ? "Saving…" : "Save"}
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setEditingNoteId(null)}
+                              disabled={savingNoteId === n.id}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="note-content">{n.content}</div>
+
+                          <div className="note-meta-row">
+                            <div className="note-meta">
+                              Added by {n.createdBy} · {new Date(n.createdAt).toLocaleString()}
+                              {n.updatedBy && (
+                                <div className="edited-tag">
+                                  Edited by {n.updatedBy} · {new Date(n.updatedAt).toLocaleString()}
+                                </div>
+                              )}
+                            </div>
+
+                            {isConfirmingDelete ? (
+                              <div className="note-actions">
+                                <button
+                                  className="icon-btn danger"
+                                  onClick={() => deleteNote(n.id)}
+                                  disabled={deletingNoteId === n.id}
+                                >
+                                  {deletingNoteId === n.id ? "Deleting…" : "✓ Confirm"}
+                                </button>
+                                <button className="icon-btn" onClick={() => setConfirmDeleteId(null)}>
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="note-actions">
+                                {revisions.length > 0 && (
+                                  <button
+                                    className={`icon-btn accent${isHistoryOpen ? " active" : ""}`}
+                                    onClick={() => setExpandedHistoryId(isHistoryOpen ? null : n.id)}
+                                  >
+                                    🕘 {isHistoryOpen ? "Hide" : "History"} ({revisions.length})
+                                  </button>
+                                )}
+                                <button className="icon-btn" onClick={() => startEditNote(n)}>✎ Edit</button>
+                                <button className="icon-btn danger" onClick={() => setConfirmDeleteId(n.id)}>🗑 Delete</button>
+                              </div>
+                            )}
+                          </div>
+
+                          {isHistoryOpen && revisions.length > 0 && (
+                            <div className="note-history">
+                              {revisions.map((rev: any) => (
+                                <div key={rev.id} className="note-history-item">
+                                  <div className="rev-content">{rev.content}</div>
+                                  <div className="rev-meta">
+                                    Written by {rev.author} · {new Date(rev.versionAt).toLocaleString()}
+                                    {" · replaced "}{new Date(rev.supersededAt).toLocaleString()}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 

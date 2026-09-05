@@ -184,13 +184,6 @@ model Investigation {
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
 
-  // Free-text investigator notes on the case (single running note, edited
-  // in place — not a per-entry log). Nullable so "no notes yet" is
-  // distinguishable from an empty save.
-  notes           String?  @db.Text
-  notesUpdatedAt  DateTime?
-  notesUpdatedBy  String?
-
   networkId   String?
   network     Network?             @relation(fields: [networkId], references: [id])
 
@@ -198,6 +191,38 @@ model Investigation {
   evidence    EvidenceRecord[]
   timeline    CaseTimelineEvent[]
   aiAssessments AiAssessment[]
+  notes       InvestigationNote[]
+}
+
+// A single investigator note on a case. Multiple notes per investigation,
+// newest first — each one carries who added it and when, and (if it's ever
+// edited) who last edited it and when. Past versions are preserved in
+// `revisions` below, so an edit never destroys what was there before.
+model InvestigationNote {
+  id              String   @id @default(cuid())
+  investigationId String
+  investigation   Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  content         String   @db.Text
+  createdBy       String
+  createdAt       DateTime @default(now())
+  updatedBy       String?  // null until the note is edited for the first time
+  updatedAt       DateTime @updatedAt
+
+  revisions       InvestigationNoteRevision[]
+}
+
+// A snapshot of a note's content right before it was overwritten by an
+// edit. Written by the PATCH /notes/:noteId route BEFORE applying the new
+// content, so `content`/`author`/`versionAt` here describe the version that
+// was just replaced — this is what "view edit history" reads from.
+model InvestigationNoteRevision {
+  id       String   @id @default(cuid())
+  noteId   String
+  note     InvestigationNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  content  String   @db.Text
+  author   String   // who wrote this version of the content
+  versionAt DateTime // when this version was created/last touched (its old createdAt/updatedAt)
+  supersededAt DateTime @default(now()) // when this version was replaced by an edit
 }
 
 model InvestigationEntity {

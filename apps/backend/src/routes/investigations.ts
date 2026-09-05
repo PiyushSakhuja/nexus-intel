@@ -22,6 +22,7 @@ investigationsRouter.get("/:displayId", async (req, res) => {
       evidence: true,
       timeline: { orderBy: { occurredAt: "asc" } },
       aiAssessments: { orderBy: { createdAt: "desc" } },
+      notes: { orderBy: { createdAt: "desc" }, include: { revisions: { orderBy: { supersededAt: "desc" } } } },
       network: true,
     },
   });
@@ -87,7 +88,7 @@ investigationsRouter.post("/:displayId/ai-assessment", async (req, res) => {
     data: {
       investigationId: inv.id,
       riskScore: result.riskScore,
-      signals: JSON.parse(JSON.stringify(result.signals)),
+      signals: result.signals,
       explanation: result.explanation,
       recommendedNext: JSON.stringify(result.recommendedNext),
     },
@@ -200,24 +201,93 @@ investigationsRouter.patch("/:displayId/ai-assessment/:assessmentId/review", asy
   res.status(200).json(assessment);
 });
 
-// PATCH /api/investigations/:displayId/notes
+// ── Investigator notes (multiple, editable, self-auditing) ────────────────
 //
-// Investigator notes are a single running note on the case (not a log of
-// entries) — this overwrites the previous value, same as editing a text
-// field and hitting save.
-investigationsRouter.patch("/:displayId/notes", async (req, res) => {
-  const { notes, updatedBy } = req.body as { notes?: string; updatedBy?: string };
-  if (typeof notes !== "string") {
-    return res.status(400).json({ error: "notes must be a string" });
-  }
+// Each note tracks who created it and when, and — separately — who last
+// edited it and when (`updatedBy`/`updatedAt`). That's enough to render a
+// full "added by X on <date> · edited by Y on <date>" trail per note
+// without a separate revision-history table.
+
+// POST /api/investigations/:displayId/notes
+// Body: { content: string, author?: string } — author defaults to the
+// investigation's assignee (no real auth in this app yet).
+investigationsRouter.post("/:displayId/notes", async (req, res) => {
+  const { content, author } = req.body as { content?: string; author?: string };
+  if (!content?.trim()) return res.status(400).json({ error: "content is required" });
 
   const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
   if (!inv) return res.status(404).json({ error: "Investigation not found" });
 
-  const updated = await prisma.investigation.update({
-    where: { id: inv.id },
-    data: { notes, notesUpdatedAt: new Date(), notesUpdatedBy: updatedBy?.trim() || inv.assignee },
+  const note = await prisma.investigationNote.create({
+    data: {
+      investigationId: inv.id,
+      content: content.trim(),
+      createdBy: author?.trim() || inv.assignee,
+    },
   });
 
-  res.status(200).json({ notes: updated.notes, notesUpdatedAt: updated.notesUpdatedAt, notesUpdatedBy: updated.notesUpdatedBy });
+  res.status(201).json(note);
+});
+
+// PATCH /api/investigations/:displayId/notes/:noteId
+// Body: { content: string, author?: string } — author is who's editing,
+// recorded as `updatedBy` so the note shows who last changed it.
+//
+// Before overwriting the content, the CURRENT version is snapshotted into
+// InvestigationNoteRevision — so editing a note never destroys the
+// previous text, it just supersedes it. That's what "view edit history"
+// on the frontend reads from.
+investigationsRouter.patch("/:displayId/notes/:noteId", async (req, res) => {
+  const { content, author } = req.body as { content?: string; author?: string };
+  if (!content?.trim()) return res.status(400).json({ error: "content is required" });
+
+  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
+  if (!inv) return res.status(404).json({ error: "Investigation not found" });
+
+  const existing = await prisma.investigationNote.findUnique({ where: { id: req.params.noteId } });
+  if (!existing || existing.investigationId !== inv.id) {
+    return res.status(404).json({ error: "Note not found for this investigation" });
+  }
+
+  // No-op edits (identical content) don't create a pointless revision entry.
+  if (existing.content.trim() === content.trim()) {
+    return res.status(200).json(
+      await prisma.investigationNote.findUnique({
+        where: { id: existing.id },
+        include: { revisions: { orderBy: { supersededAt: "desc" } } },
+      })
+    );
+  }
+
+  const [, note] = await prisma.$transaction([
+    prisma.investigationNoteRevision.create({
+      data: {
+        noteId: existing.id,
+        content: existing.content,
+        author: existing.updatedBy ?? existing.createdBy,
+        versionAt: existing.updatedAt ?? existing.createdAt,
+      },
+    }),
+    prisma.investigationNote.update({
+      where: { id: existing.id },
+      data: { content: content.trim(), updatedBy: author?.trim() || inv.assignee },
+      include: { revisions: { orderBy: { supersededAt: "desc" } } },
+    }),
+  ]);
+
+  res.status(200).json(note);
+});
+
+// DELETE /api/investigations/:displayId/notes/:noteId
+investigationsRouter.delete("/:displayId/notes/:noteId", async (req, res) => {
+  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
+  if (!inv) return res.status(404).json({ error: "Investigation not found" });
+
+  const existing = await prisma.investigationNote.findUnique({ where: { id: req.params.noteId } });
+  if (!existing || existing.investigationId !== inv.id) {
+    return res.status(404).json({ error: "Note not found for this investigation" });
+  }
+
+  await prisma.investigationNote.delete({ where: { id: existing.id } });
+  res.status(204).send();
 });
