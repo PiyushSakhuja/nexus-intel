@@ -3626,6 +3626,37 @@ async function main() {
   }
 
   console.log('Audit log entries created: 10')
+
+  // ─── Prompt templates ───────────────────────────────────────────────────────
+  // The AI Assessment prompt lives here, not hardcoded in application code, so
+  // it can be reviewed/tuned as data. lib/investigationAssessment.ts fetches
+  // this row by `key` and falls back to a built-in default only if it's ever
+  // missing (e.g. a fresh DB that hasn't been seeded yet).
+
+  await prisma.promptTemplate.upsert({
+    where: { key: 'ai_assessment' },
+    update: {},
+    create: {
+      key: 'ai_assessment',
+      systemInstruction: 'You are a criminal intelligence analysis assistant. Always respond with valid JSON only.',
+      template: `You are assisting a criminal-intelligence investigator reviewing case {{displayId}} ("{{title}}").
+
+Case summary: {{description}}
+Status: {{status}} · Priority: {{priority}}
+Computed risk score: {{score}}/100 — this was derived deterministically from the signals below; do not recompute, restate as different, or contradict this number.
+
+Contributing signals:
+{{signalLines}}
+
+Return a JSON object with exactly two fields:
+1. "explanation": a concise (3-5 sentence) plain-English assessment of why this case scored {{score}}/100, grounded ONLY in the signals and case summary above. Do not invent entities, wallets, or facts not present above.
+2. "recommendedNext": an array of 3-5 concrete, specific next investigative steps, grounded in the entities/network/evidence referenced above.
+
+This is a decision-support tool only — conclusions require investigator review and do not constitute a criminal determination.`,
+    },
+  })
+
+  console.log('Prompt templates created: 1')
   console.log('Seed complete.')
 }
 

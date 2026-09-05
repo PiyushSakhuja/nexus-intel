@@ -18,6 +18,7 @@
 // whole request.
 
 import { callLlmForJson, LlmError, SupportedModel, DEFAULT_MODEL } from "./llmClient.js";
+import { prisma } from "./prisma.js";
 
 export interface AssessmentSignal {
   label: string;
@@ -135,24 +136,69 @@ function fallbackNarrative(
   return { explanation, recommendedNext };
 }
 
-function buildPrompt(inv: AssessmentInput, score: number, signals: AssessmentSignal[]): string {
-  const signalLines =
-    signals.map((s) => `- ${s.label} (contributed ${s.value} pts)`).join("\n") || "- No contributing signals found";
+// PromptTemplate.key used to look up the AI Assessment prompt in the DB.
+// See prisma/seed.ts for the seeded default row.
+const PROMPT_TEMPLATE_KEY = "ai_assessment";
 
-  return `You are assisting a criminal-intelligence investigator reviewing case ${inv.displayId} ("${inv.title}").
+// Used ONLY if the `ai_assessment` row is missing from PromptTemplate (e.g.
+// a fresh DB that hasn't been seeded yet) — mirrors the fallback philosophy
+// used elsewhere in this file: a DB miss should never fail the whole
+// request, but it should be loud in the logs so it gets fixed.
+const DEFAULT_SYSTEM_INSTRUCTION =
+  "You are a criminal intelligence analysis assistant. Always respond with valid JSON only.";
+const DEFAULT_TEMPLATE = `You are assisting a criminal-intelligence investigator reviewing case {{displayId}} ("{{title}}").
 
-Case summary: ${inv.description}
-Status: ${inv.status} · Priority: ${inv.priority}
-Computed risk score: ${score}/100 — this was derived deterministically from the signals below; do not recompute, restate as different, or contradict this number.
+Case summary: {{description}}
+Status: {{status}} · Priority: {{priority}}
+Computed risk score: {{score}}/100 — this was derived deterministically from the signals below; do not recompute, restate as different, or contradict this number.
 
 Contributing signals:
-${signalLines}
+{{signalLines}}
 
 Return a JSON object with exactly two fields:
-1. "explanation": a concise (3-5 sentence) plain-English assessment of why this case scored ${score}/100, grounded ONLY in the signals and case summary above. Do not invent entities, wallets, or facts not present above.
+1. "explanation": a concise (3-5 sentence) plain-English assessment of why this case scored {{score}}/100, grounded ONLY in the signals and case summary above. Do not invent entities, wallets, or facts not present above.
 2. "recommendedNext": an array of 3-5 concrete, specific next investigative steps, grounded in the entities/network/evidence referenced above.
 
 This is a decision-support tool only — conclusions require investigator review and do not constitute a criminal determination.`;
+
+/**
+ * Fetches the AI Assessment prompt (system instruction + template) from the
+ * PromptTemplate table. This is what makes the prompt editable as data
+ * instead of a string baked into application code. Falls back to the
+ * built-in default above (with a console.warn) if the row doesn't exist,
+ * so a missing/un-seeded row degrades gracefully rather than 500ing.
+ */
+async function getAssessmentPrompt(): Promise<{ systemInstruction: string; template: string }> {
+  try {
+    const row = await prisma.promptTemplate.findUnique({ where: { key: PROMPT_TEMPLATE_KEY } });
+    if (row?.template) {
+      return { systemInstruction: row.systemInstruction || DEFAULT_SYSTEM_INSTRUCTION, template: row.template };
+    }
+    console.warn(`[ai-assessment] No PromptTemplate row found for key "${PROMPT_TEMPLATE_KEY}" — using built-in default prompt. Run the seed script to fix this.`);
+  } catch (err) {
+    console.error(`[ai-assessment] Failed to fetch prompt template from DB, using built-in default:`, (err as Error).message);
+  }
+  return { systemInstruction: DEFAULT_SYSTEM_INSTRUCTION, template: DEFAULT_TEMPLATE };
+}
+
+// Fills {{placeholder}} tokens in the DB-fetched (or fallback) template.
+// Deliberately simple string substitution — no templating engine/eval, so
+// a stored template can never execute arbitrary code.
+function renderPrompt(template: string, inv: AssessmentInput, score: number, signals: AssessmentSignal[]): string {
+  const signalLines =
+    signals.map((s) => `- ${s.label} (contributed ${s.value} pts)`).join("\n") || "- No contributing signals found";
+
+  const values: Record<string, string> = {
+    displayId: inv.displayId,
+    title: inv.title,
+    description: inv.description,
+    status: inv.status,
+    priority: inv.priority,
+    score: String(score),
+    signalLines,
+  };
+
+  return template.replace(/\{\{(\w+)\}\}/g, (_match, key: string) => values[key] ?? `{{${key}}}`);
 }
 
 /**
@@ -166,12 +212,13 @@ export async function generateInvestigationAssessment(
   model: SupportedModel = DEFAULT_MODEL
 ): Promise<AssessmentResult> {
   const { score, signals } = computeInvestigationSignals(inv);
+  const { systemInstruction, template } = await getAssessmentPrompt();
 
   try {
     const parsed = await callLlmForJson<{ explanation: string; recommendedNext: string[] }>({
       model,
-      prompt: buildPrompt(inv, score, signals),
-      systemInstruction: "You are a criminal intelligence analysis assistant. Always respond with valid JSON only.",
+      prompt: renderPrompt(template, inv, score, signals),
+      systemInstruction,
     });
     if (!parsed?.explanation || !Array.isArray(parsed.recommendedNext) || parsed.recommendedNext.length === 0) {
       throw new LlmError("LLM response was missing required fields");

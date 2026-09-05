@@ -14,6 +14,19 @@ datasource db {
 
 
 
+// Editable prompt configuration for LLM-backed features, so the prompt
+// text is a data row an investigator/admin can tune rather than a string
+// buried in application code. `template` supports {{placeholder}} tokens
+// that the calling code fills in (see lib/investigationAssessment.ts).
+model PromptTemplate {
+  id                String   @id @default(cuid())
+  key               String   @unique // e.g. "ai_assessment"
+  systemInstruction String   @db.Text
+  template          String   @db.Text
+  updatedAt         DateTime @updatedAt
+  updatedBy         String?
+}
+
 enum SourceAccess {
   AUTHORIZED
   PUBLIC
@@ -171,6 +184,13 @@ model Investigation {
   createdAt   DateTime             @default(now())
   updatedAt   DateTime             @updatedAt
 
+  // Free-text investigator notes on the case (single running note, edited
+  // in place — not a per-entry log). Nullable so "no notes yet" is
+  // distinguishable from an empty save.
+  notes           String?  @db.Text
+  notesUpdatedAt  DateTime?
+  notesUpdatedBy  String?
+
   networkId   String?
   network     Network?             @relation(fields: [networkId], references: [id])
 
@@ -192,6 +212,13 @@ model InvestigationEntity {
 // AI Assessment: generated FROM structured risk-engine signals, never the
 // other way around. Store the signals alongside the generated text so the
 // explanation is always traceable back to real numbers.
+enum AssessmentReviewStatus {
+  PENDING   // not yet reviewed by an investigator
+  ACCEPTED  // investigator accepted the AI narrative/next-steps as-is
+  MODIFIED  // investigator kept the assessment but edited the text
+  REJECTED  // investigator rejected the AI narrative/next-steps
+}
+
 model AiAssessment {
   id              String   @id @default(cuid())
   investigationId String
@@ -201,6 +228,18 @@ model AiAssessment {
   explanation     String   @db.Text
   recommendedNext String?  @db.Text
   createdAt       DateTime @default(now())
+
+  // ── Investigator review (Accept / Modify / Reject) ──────────────────────
+  // The original explanation/recommendedNext above are NEVER overwritten —
+  // they stay as the AI actually produced them. When an investigator edits
+  // the text ("Modify"), the edit is stored separately below so there's
+  // always a clean AI-generated-vs-investigator-edited distinction.
+  reviewStatus          AssessmentReviewStatus @default(PENDING)
+  editedExplanation     String?  @db.Text
+  editedRecommendedNext String?  @db.Text
+  reviewNote            String?  @db.Text // optional reason, mainly used on REJECTED
+  reviewedBy            String?
+  reviewedAt            DateTime?
 }
 
 // ─── Evidence ────────────────────────────────────────────────────────────

@@ -207,8 +207,12 @@ export function WorkspaceScreen({
   navigate: (s: string, d?: any) => void;
   displayId?: string | null;
 }) {
+  // ─── Investigator notes ──────────────────────────────────────────────────
   const [note, setNote] = useState("");
-  const [accepted, setAccepted] = useState(false);
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteError, setNoteError] = useState<string | null>(null);
+  const [noteSavedAt, setNoteSavedAt] = useState<Date | null>(null);
+  const [noteDirty, setNoteDirty] = useState(false);
 
   // ─── Real investigation data ────────────────────────────────────────────
   const [inv, setInv] = useState<any>(investigations[0]);
@@ -248,6 +252,15 @@ export function WorkspaceScreen({
         relatedEntities: (data.entities ?? []).map((ie: any) => ie.entity),
         latestAssessment: data.aiAssessments?.[0] ?? null,
       });
+
+      // Seed the notes textarea from the persisted value — but only if the
+      // investigator hasn't already started typing an unsaved edit, so a
+      // background refetch never clobbers in-progress typing.
+      if (!cancelled) {
+        setNote(data.notes ?? "");
+        setNoteDirty(false);
+        setNoteSavedAt(data.notesUpdatedAt ? new Date(data.notesUpdatedAt) : null);
+      }
     };
 
     load()
@@ -280,7 +293,9 @@ export function WorkspaceScreen({
       if (!res.ok) throw new Error(`API ${res.status}`);
       const data = await res.json();
       setAssessment(data);
-      setAccepted(false);
+      setShowModifyForm(false);
+      setShowRejectForm(false);
+      setReviewError(null);
     } catch (err: any) {
       setAssessError(err.message ?? "Failed to generate AI assessment");
     } finally {
@@ -288,8 +303,105 @@ export function WorkspaceScreen({
     }
   };
 
+  const saveNote = async () => {
+    if (!inv?.id) return;
+    setNoteSaving(true);
+    setNoteError(null);
+    try {
+      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/notes`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: note, updatedBy: inv.assignee }),
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const data = await res.json();
+      setNoteSavedAt(data.notesUpdatedAt ? new Date(data.notesUpdatedAt) : new Date());
+      setNoteDirty(false);
+    } catch (err: any) {
+      setNoteError(err.message ?? "Failed to save note");
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+
+  // ─── AI Assessment review (Accept / Modify / Reject) ────────────────────
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [showModifyForm, setShowModifyForm] = useState(false);
+  const [modifyExplanation, setModifyExplanation] = useState("");
+  const [modifyNextSteps, setModifyNextSteps] = useState("");
+  const [showRejectForm, setShowRejectForm] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+
+  const submitReview = async (action: "ACCEPT" | "MODIFY" | "REJECT" | "RESET", extra: Record<string, any> = {}) => {
+    if (!inv?.id || !assessment?.id) return;
+    setReviewSubmitting(true);
+    setReviewError(null);
+    try {
+      const res = await fetch(
+        `http://localhost:4000/api/investigations/${inv.id}/ai-assessment/${assessment.id}/review`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, reviewedBy: inv.assignee, ...extra }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `API ${res.status}`);
+      }
+      const data = await res.json();
+      setAssessment((prev: any) => ({ ...prev, ...data }));
+      setShowModifyForm(false);
+      setShowRejectForm(false);
+    } catch (err: any) {
+      setReviewError(err.message ?? "Failed to record decision");
+    } finally {
+      setReviewSubmitting(false);
+    }
+  };
+
+  const openModifyForm = () => {
+    setModifyExplanation(assessment?.editedExplanation ?? assessment?.explanation ?? "");
+    let seedSteps: string[] = [];
+    try {
+      seedSteps = assessment?.editedRecommendedNext
+        ? JSON.parse(assessment.editedRecommendedNext)
+        : assessment?.recommendedNext
+        ? JSON.parse(assessment.recommendedNext)
+        : [];
+    } catch {
+      seedSteps = [];
+    }
+    setModifyNextSteps(seedSteps.join("\n"));
+    setShowRejectForm(false);
+    setShowModifyForm(true);
+  };
+
+  const submitModify = () => {
+    if (!modifyExplanation.trim()) return;
+    const editedRecommendedNext = modifyNextSteps
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    submitReview("MODIFY", { editedExplanation: modifyExplanation.trim(), editedRecommendedNext });
+  };
+
+  // When an investigator has MODIFIED the assessment, their edited next
+  // steps are the ones to display — the original AI text is preserved
+  // underneath but is no longer what's shown as "current".
+  const displayExplanation: string =
+    assessment?.reviewStatus === "MODIFIED" && assessment?.editedExplanation
+      ? assessment.editedExplanation
+      : assessment?.explanation ?? "";
+
   const recommendations: string[] = (() => {
-    if (!assessment?.recommendedNext) {
+    const raw =
+      assessment?.reviewStatus === "MODIFIED" && assessment?.editedRecommendedNext
+        ? assessment.editedRecommendedNext
+        : assessment?.recommendedNext;
+
+    if (!raw) {
       return assessment
         ? []
         : [
@@ -300,10 +412,10 @@ export function WorkspaceScreen({
           ];
     }
     try {
-      const parsed = JSON.parse(assessment.recommendedNext);
-      return Array.isArray(parsed) ? parsed : [assessment.recommendedNext];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [raw];
     } catch {
-      return [assessment.recommendedNext];
+      return [raw];
     }
   })();
 
@@ -391,9 +503,25 @@ export function WorkspaceScreen({
 
           {/* Notes */}
           <div className="card" style={{ padding: 20 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)", marginBottom: 12 }}>Investigator Notes</div>
-            <textarea className="input" style={{ minHeight: 80, resize: "vertical", fontSize: 12.5 }} placeholder="Add investigation notes…" value={note} onChange={e => setNote(e.target.value)} />
-            <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }}>Save Note</button>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)" }}>Investigator Notes</div>
+              {noteSavedAt && !noteDirty && (
+                <span style={{ fontSize: 10.5, color: "var(--text-4)" }}>Saved {noteSavedAt.toLocaleTimeString()}</span>
+              )}
+            </div>
+            <textarea
+              className="input"
+              style={{ minHeight: 80, resize: "vertical", fontSize: 12.5 }}
+              placeholder="Add investigation notes…"
+              value={note}
+              onChange={e => { setNote(e.target.value); setNoteDirty(true); }}
+            />
+            {noteError && (
+              <div style={{ fontSize: 11, color: "var(--critical-light)", marginTop: 6 }}>Couldn't save ({noteError}).</div>
+            )}
+            <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={saveNote} disabled={noteSaving || !noteDirty}>
+              {noteSaving ? "Saving…" : "Save Note"}
+            </button>
           </div>
         </div>
 
@@ -462,8 +590,13 @@ export function WorkspaceScreen({
                   </div>
                 )}
 
+                {assessment.reviewStatus === "MODIFIED" && assessment.editedExplanation && (
+                  <div style={{ fontSize: 10, color: "var(--accent-hi)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                    Edited by investigator
+                  </div>
+                )}
                 <div style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.65, marginBottom: 12 }}>
-                  {assessment.explanation}
+                  {displayExplanation}
                 </div>
 
                 {assessment.aiGenerated === false && (
@@ -508,22 +641,139 @@ export function WorkspaceScreen({
 
                 <div style={{ fontSize: 11, color: "var(--text-4)", marginBottom: 8 }}>Investigator Decision</div>
 
-                {accepted ? (
-                  <div className="integrity-banner">
-                    <span>✓</span> Recommendations accepted
+                {reviewError && (
+                  <div style={{ fontSize: 11, color: "var(--critical-light)", marginBottom: 8 }}>
+                    Couldn't save decision ({reviewError}).
                   </div>
-                ) : (
+                )}
+
+                {(!assessment.reviewStatus || assessment.reviewStatus === "PENDING") && !showModifyForm && !showRejectForm && (
                   <div style={{ display: "flex", gap: 7 }}>
-                    <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center", fontSize: 11 }} onClick={() => setAccepted(true)}>
+                    <button
+                      className="btn btn-primary"
+                      style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                      onClick={() => submitReview("ACCEPT")}
+                      disabled={reviewSubmitting}
+                    >
                       Accept
                     </button>
-                    <button className="btn btn-ghost" style={{ flex: 1, justifyContent: "center", fontSize: 11 }}>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                      onClick={openModifyForm}
+                      disabled={reviewSubmitting}
+                    >
                       Modify
                     </button>
-                    <button className="btn btn-ghost" style={{ flex: 1, justifyContent: "center", fontSize: 11 }}>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                      onClick={() => { setShowRejectForm(true); setShowModifyForm(false); }}
+                      disabled={reviewSubmitting}
+                    >
                       Reject
                     </button>
                   </div>
+                )}
+
+                {showModifyForm && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ fontSize: 10.5, color: "var(--text-4)" }}>Explanation</div>
+                    <textarea
+                      className="input"
+                      style={{ minHeight: 70, resize: "vertical", fontSize: 12 }}
+                      value={modifyExplanation}
+                      onChange={e => setModifyExplanation(e.target.value)}
+                    />
+                    <div style={{ fontSize: 10.5, color: "var(--text-4)" }}>Recommended next steps (one per line)</div>
+                    <textarea
+                      className="input"
+                      style={{ minHeight: 70, resize: "vertical", fontSize: 12 }}
+                      value={modifyNextSteps}
+                      onChange={e => setModifyNextSteps(e.target.value)}
+                    />
+                    <div style={{ display: "flex", gap: 7 }}>
+                      <button
+                        className="btn btn-primary"
+                        style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                        onClick={submitModify}
+                        disabled={reviewSubmitting || !modifyExplanation.trim()}
+                      >
+                        {reviewSubmitting ? "Saving…" : "Save Changes"}
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                        onClick={() => setShowModifyForm(false)}
+                        disabled={reviewSubmitting}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {showRejectForm && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <textarea
+                      className="input"
+                      style={{ minHeight: 60, resize: "vertical", fontSize: 12 }}
+                      placeholder="Reason for rejecting this assessment (optional)…"
+                      value={rejectReason}
+                      onChange={e => setRejectReason(e.target.value)}
+                    />
+                    <div style={{ display: "flex", gap: 7 }}>
+                      <button
+                        className="btn btn-danger"
+                        style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                        onClick={() => submitReview("REJECT", { reviewNote: rejectReason.trim() })}
+                        disabled={reviewSubmitting}
+                      >
+                        {reviewSubmitting ? "Saving…" : "Confirm Reject"}
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                        onClick={() => setShowRejectForm(false)}
+                        disabled={reviewSubmitting}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {assessment.reviewStatus && assessment.reviewStatus !== "PENDING" && !showModifyForm && !showRejectForm && (
+                  <>
+                    {assessment.reviewStatus === "ACCEPTED" && (
+                      <div className="integrity-banner">
+                        <span>✓</span> Accepted{assessment.reviewedBy ? ` by ${assessment.reviewedBy}` : ""}
+                      </div>
+                    )}
+                    {assessment.reviewStatus === "MODIFIED" && (
+                      <div className="integrity-banner">
+                        <span>✎</span> Modified{assessment.reviewedBy ? ` by ${assessment.reviewedBy}` : ""}
+                      </div>
+                    )}
+                    {assessment.reviewStatus === "REJECTED" && (
+                      <div style={{ padding: "8px 10px", borderRadius: 7, background: "rgba(220,38,38,0.08)", border: "1px solid rgba(220,38,38,0.2)" }}>
+                        <div style={{ fontSize: 11.5, color: "var(--critical-light)", display: "flex", alignItems: "center", gap: 6 }}>
+                          <span>✕</span> Rejected{assessment.reviewedBy ? ` by ${assessment.reviewedBy}` : ""}
+                        </div>
+                        {assessment.reviewNote && (
+                          <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>{assessment.reviewNote}</div>
+                        )}
+                      </div>
+                    )}
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ marginTop: 8, width: "100%", justifyContent: "center" }}
+                      onClick={() => submitReview("RESET")}
+                      disabled={reviewSubmitting}
+                    >
+                      Change decision
+                    </button>
+                  </>
                 )}
               </>
             )}
