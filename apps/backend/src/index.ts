@@ -11,6 +11,7 @@ import { networksRouter } from "./routes/networks.js";
 import { investigationsRouter } from "./routes/investigations.js";
 import { graphRouter } from "./routes/graph.js";
 import { simulateRouter } from "./routes/simulate.js";
+import { vendorsRouter } from "./routes/vendors.js";
 import {
   evidenceRouter,
   walletsRouter,
@@ -37,6 +38,7 @@ app.use("/api/simulate", simulateRouter);
 app.use("/api/evidence", evidenceRouter);
 app.use("/api/wallets", walletsRouter);
 app.use("/api/listings", listingsRouter);
+app.use("/api/vendors", vendorsRouter);
 app.use("/api/audit-log", auditRouter);
 app.use("/api/sources", sourcesRouter);
 

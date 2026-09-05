@@ -81,7 +81,11 @@ function categoryBaseRisk(category: string): RiskSignal | null {
 
 // High-risk categories used by several other features below. Defined once
 // so the notion of "high risk category" stays consistent across features.
-const HIGH_RISK_CATEGORIES = new Set(["Drugs", "Fraud Related", "Counterfeits"]);
+// Exported (was previously module-private) so vendor/entity/network-level
+// aggregation modules can reuse the exact same definition of "high-risk
+// category" instead of maintaining a second, potentially drifting copy.
+// This is the ONLY change made to this file — no scoring logic touched.
+export const HIGH_RISK_CATEGORIES = new Set(["Drugs", "Fraud Related", "Counterfeits"]);
 
 // ─── Feature 2: bulk quantity indicator ─────────────────────────────────
 //
