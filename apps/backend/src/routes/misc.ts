@@ -1,6 +1,7 @@
 import { Router } from "express";
 import crypto from "node:crypto";
 import { prisma } from "../lib/prisma.js";
+import { scoreListings, signalsToDisplayStrings, type ListingInput } from "../lib/riskEngine.js";
 
 export const evidenceRouter = Router();
 export const walletsRouter = Router();
@@ -39,8 +40,36 @@ walletsRouter.get("/", async (_req, res) => {
   res.json(await prisma.wallet.findMany({ orderBy: { risk: "desc" } }));
 });
 
+// GET /api/listings — risk/signals are NOT read from the stored columns.
+// They're recomputed here, at request time, from riskEngine.ts against the
+// current listing population, so the API can never drift from the scorer
+// (the stored `risk`/`signals` columns are effectively a cache last written
+// by prisma/seed.ts; this route treats riskEngine.ts as the source of truth
+// instead of duplicating any scoring logic locally).
 listingsRouter.get("/", async (_req, res) => {
-  res.json(await prisma.listing.findMany({ include: { source: true }, orderBy: { risk: "desc" } }));
+  const listings = await prisma.listing.findMany({ include: { source: true } });
+
+  const inputs: ListingInput[] = listings.map((l) => ({
+    id: l.id,
+    category: l.category,
+    title: l.title,
+    priceUsd: l.priceUsd,
+    marketplace: l.marketplace,
+    vendorAlias: l.vendorAlias,
+    firstSeen: l.firstSeen,
+    lastSeen: l.lastSeen,
+  }));
+  const scored = scoreListings(inputs);
+
+  const withLiveRisk = listings
+    .map((l) => {
+      const result = scored.get(l.id);
+      if (!result) return l; // should never happen — every input has a score
+      return { ...l, risk: result.score, signals: signalsToDisplayStrings(result.signals) };
+    })
+    .sort((a, b) => b.risk - a.risk);
+
+  res.json(withLiveRisk);
 });
 
 auditRouter.get("/", async (_req, res) => {
