@@ -28,6 +28,8 @@ export function AuditScreen() {
   const [auditRows, setAuditRows] = useState<any[]>(auditLog);
   const [auditLoading, setAuditLoading] = useState(true);
   const [auditError, setAuditError] = useState<string|null>(null);
+  const [activeFilter, setActiveFilter] = useState("All");
+  const [searchText, setSearchText] = useState("");
 
   useEffect(() => {
     fetch("http://localhost:4000/api/audit-log")
@@ -50,6 +52,21 @@ export function AuditScreen() {
       .finally(() => setAuditLoading(false));
   }, []);
 
+  const filterChips = ["All","Read","Write","Export","Admin","System"];
+
+  // Chip filters by log.type (e.g. "Read" chip -> type === "read"); "All"
+  // shows everything. Search box filters on top of that by user or action
+  // text, case-insensitive.
+  const filteredRows = auditRows.filter(log => {
+    const matchesChip = activeFilter === "All" || log.type === activeFilter.toLowerCase();
+    const q = searchText.trim().toLowerCase();
+    const matchesSearch = !q ||
+      (log.user ?? "").toLowerCase().includes(q) ||
+      (log.action ?? "").toLowerCase().includes(q) ||
+      (log.resource ?? "").toLowerCase().includes(q);
+    return matchesChip && matchesSearch;
+  });
+
   return (
     <div style={{padding:"26px 28px"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
@@ -58,27 +75,46 @@ export function AuditScreen() {
           <p className="page-sub">Complete activity audit trail for compliance, accountability, and security review.</p>
         </div>
         <div style={{display:"flex",gap:8}}>
-          <input className="input" style={{width:220,padding:"7px 12px",fontSize:12}} placeholder="Filter by user or action…"/>
+          <input
+            className="input"
+            style={{width:220,padding:"7px 12px",fontSize:12}}
+            placeholder="Filter by user or action…"
+            value={searchText}
+            onChange={e=>setSearchText(e.target.value)}
+          />
           <button className="btn btn-ghost btn-sm">Export CSV</button>
         </div>
       </div>
 
       {/* Filter chips */}
       <div style={{display:"flex",gap:7,marginBottom:16}}>
-        {["All","Read","Write","Export","Admin","System"].map(f=>(
-          <div key={f} className={`chip ${f==="All"?"active":""}`}>{f}</div>
+        {filterChips.map(f=>(
+          <div
+            key={f}
+            className={`chip ${activeFilter===f?"active":""}`}
+            style={{cursor:"pointer"}}
+            onClick={()=>setActiveFilter(f)}
+          >
+            {f}
+            <span style={{marginLeft:5,fontSize:10,opacity:0.65}}>
+              ({f==="All" ? auditRows.length : auditRows.filter(r=>r.type===f.toLowerCase()).length})
+            </span>
+          </div>
         ))}
       </div>
 
       {auditLoading && <p className="page-sub" style={{marginBottom:12}}>Loading audit log…</p>}
       {auditError && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({auditError}) — showing demo data.</p>}
+      {!auditLoading && filteredRows.length === 0 && (
+        <p className="page-sub" style={{marginBottom:12}}>No audit entries match this filter.</p>
+      )}
       <div className="card">
         <table className="data-table">
           <thead>
             <tr><th>Timestamp</th><th>User</th><th>Action Type</th><th>Action</th><th>Resource</th><th>IP / Session</th><th>Status</th></tr>
           </thead>
           <tbody>
-            {auditRows.map((log,i)=>(
+            {filteredRows.map((log,i)=>(
               <tr key={i}>
                 <td><span className="mono" style={{fontSize:11.5,color:"var(--text-3)"}}>{log.ts}</span></td>
                 <td><span style={{color:"var(--text-1)",fontWeight:500}}>{log.user}</span></td>
