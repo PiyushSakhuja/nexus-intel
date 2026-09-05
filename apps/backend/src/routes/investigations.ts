@@ -6,12 +6,119 @@ import { DEFAULT_MODEL, MODEL_OPTIONS, type SupportedModel } from "../lib/llmCli
 
 export const investigationsRouter = Router();
 
+// POST /api/investigations — create a new investigation
+investigationsRouter.post("/", async (req, res) => {
+  const { title, description, priority, status, assignee } = req.body as {
+    title?: string; description?: string; priority?: string; status?: string; assignee?: string;
+  };
+  if (!title?.trim() || !description?.trim()) {
+    return res.status(400).json({ error: "title and description are required" });
+  }
+  const validPriorities = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+  const validStatuses = ["UNDER_INVESTIGATION", "UNDER_REVIEW", "MONITORING", "CLOSED"];
+  const safePriority = validPriorities.includes(priority ?? "") ? priority! : "MEDIUM";
+  const safeStatus = validStatuses.includes(status ?? "") ? status! : "UNDER_INVESTIGATION";
+
+  // Generate a display ID like INV-2026-XXX
+  const count = await prisma.investigation.count();
+  const displayId = `INV-2026-${String(count + 1).padStart(3, "0")}`;
+
+  const inv = await prisma.investigation.create({
+    data: {
+      displayId,
+      title: title.trim(),
+      description: description.trim(),
+      priority: safePriority as any,
+      status: safeStatus as any,
+      assignee: assignee?.trim() || "Unassigned",
+    },
+  });
+  res.status(201).json(inv);
+});
+
+// DELETE /api/investigations/:displayId
+investigationsRouter.delete("/:displayId", async (req, res) => {
+  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
+  if (!inv) return res.status(404).json({ error: "Investigation not found" });
+  await prisma.investigation.delete({ where: { id: inv.id } });
+  res.status(204).send();
+});
+
 investigationsRouter.get("/", async (_req, res) => {
   const investigations = await prisma.investigation.findMany({
     include: { _count: { select: { entities: true, evidence: true } } },
     orderBy: { updatedAt: "desc" },
   });
   res.json(investigations);
+});
+
+// PATCH /api/investigations/:displayId — update assignee, status, priority, etc.
+investigationsRouter.patch("/:displayId", async (req, res) => {
+  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
+  if (!inv) return res.status(404).json({ error: "Investigation not found" });
+
+  const { assignee, status, priority, title, description } = req.body as {
+    assignee?: string; status?: string; priority?: string; title?: string; description?: string;
+  };
+  const validStatuses = ["UNDER_INVESTIGATION", "UNDER_REVIEW", "MONITORING", "CLOSED"];
+  const validPriorities = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+
+  const data: any = {};
+  if (assignee !== undefined) data.assignee = assignee.trim();
+  if (status !== undefined && validStatuses.includes(status)) data.status = status as any;
+  if (priority !== undefined && validPriorities.includes(priority)) data.priority = priority as any;
+  if (title !== undefined) data.title = title.trim();
+  if (description !== undefined) data.description = description.trim();
+
+  const updated = await prisma.investigation.update({ where: { id: inv.id }, data });
+  res.json(updated);
+});
+
+// POST /api/investigations/:displayId/entities — link an entity to an investigation
+investigationsRouter.post("/:displayId/entities", async (req, res) => {
+  const { entityId } = req.body as { entityId?: string };
+  if (!entityId) return res.status(400).json({ error: "entityId is required" });
+
+  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
+  if (!inv) return res.status(404).json({ error: "Investigation not found" });
+
+  const entity = await prisma.entity.findUnique({ where: { id: entityId } });
+  if (!entity) return res.status(404).json({ error: "Entity not found" });
+
+  try {
+    const link = await prisma.investigationEntity.create({
+      data: { investigationId: inv.id, entityId: entity.id },
+      include: { entity: true },
+    });
+    res.status(201).json(link);
+  } catch (e: any) {
+    if (e.code === "P2002") return res.status(409).json({ error: "Entity already linked to this investigation" });
+    throw e;
+  }
+});
+
+// POST /api/investigations/:displayId/evidence — add an evidence record
+investigationsRouter.post("/:displayId/evidence", async (req, res) => {
+  const { type, source } = req.body as { type?: string; source?: string };
+  if (!type || !source?.trim()) return res.status(400).json({ error: "type and source are required" });
+
+  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
+  if (!inv) return res.status(404).json({ error: "Investigation not found" });
+
+  const count = await prisma.evidenceRecord.count({ where: { investigationId: inv.id } });
+  const displayId = `EV-${String(count + 1).padStart(4, "0")}`;
+
+  const evidence = await prisma.evidenceRecord.create({
+    data: {
+      displayId,
+      investigationId: inv.id,
+      type: type.trim(),
+      uploadedBy: "Investigator A",
+      status: "PENDING",
+      hash: `sha256-${Math.random().toString(36).slice(2, 18)}`,
+    },
+  });
+  res.status(201).json(evidence);
 });
 
 investigationsRouter.get("/:displayId", async (req, res) => {
