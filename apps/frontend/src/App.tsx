@@ -32,6 +32,7 @@ export default function App() {
   const [screen, setScreen] = useState("overview");
   const [entityData, setEntityData] = useState(entities[0]);
   const [workspaceDisplayId, setWorkspaceDisplayId] = useState<string | null>(null);
+  const [networkDisplayId, setNetworkDisplayId] = useState<string | null>(null);
   const navigate = useCallback((s: string, data?: any) => {
     if (s === "entity" && data) {
       setEntityData(data);
@@ -45,6 +46,17 @@ export default function App() {
 
       if (displayId) {
         setWorkspaceDisplayId(displayId);
+      }
+    }
+
+    if (s === "network-risk" && data) {
+      const displayId =
+        typeof data === "string"
+          ? data
+          : data.displayId ?? data.id;
+
+      if (displayId) {
+        setNetworkDisplayId(displayId);
       }
     }
 
@@ -65,7 +77,7 @@ export default function App() {
       case "entities": return <EntitiesScreen navigate={navigate} />;
       case "entity": return <EntityScreen entity={entityData} navigate={navigate} />;
       case "graph": return <GraphScreen navigate={navigate} />;
-      case "network-risk": return <NetworkRiskScreen navigate={navigate} />;
+      case "network-risk": return <NetworkRiskScreen navigate={navigate} displayId={networkDisplayId} />;
       case "listings": return <ListingsScreen />;
       case "blockchain": return <BlockchainScreen />;
       case "investigations": return <InvestigationsScreen navigate={navigate} />;

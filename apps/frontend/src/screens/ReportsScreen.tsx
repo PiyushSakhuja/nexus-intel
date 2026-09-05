@@ -70,6 +70,19 @@ export function ReportsScreen() {
   // ── Compose report sections from REAL fetched data ──────────────────────
   // Nothing here is invented client-side: every number/fact comes from
   // reportData, which is the actual investigation record from Postgres.
+  // recommendedNext / editedRecommendedNext are stored as JSON-stringified
+  // arrays — parse defensively so the report never prints raw JSON.
+  const parseSteps = (raw: any): string[] => {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [String(raw)];
+    } catch {
+      return [String(raw)];
+    }
+  };
+
   const buildSections = () => {
     if (!reportData) return [];
     const inv = reportData;
@@ -83,7 +96,14 @@ export function ReportsScreen() {
     const entityNames = entityList.map((e: any) => e.alias).join(", ") || "none resolved";
     const topConfidence = entityList.length ? Math.max(...entityList.map((e: any) => e.confidence ?? 0)) : null;
 
-    const out: { t: string; c: string }[] = [];
+    const out: { t: string; c?: string; ai?: {
+      tone: "accepted" | "rejected" | "modified" | "pending" | "none";
+      badgeLabel: string;
+      byline?: string;
+      body?: string;
+      steps?: string[];
+      footer?: string;
+    } }[] = [];
 
     if (checked["Executive Summary"]) out.push({
       t: "Executive Summary",
@@ -128,12 +148,63 @@ export function ReportsScreen() {
         : "No timeline events have been recorded for this investigation yet.",
     });
 
-    if (checked["AI Explanation"]) out.push({
-      t: "AI Explanation",
-      c: assessment
-        ? `${assessment.explanation}${assessment.recommendedNext ? ` Recommended next step: ${assessment.recommendedNext}` : ""} (Risk score at time of assessment: ${assessment.riskScore}/100.)`
-        : "No AI assessment has been generated for this investigation yet.",
-    });
+    if (checked["AI Explanation"]) {
+      if (!assessment) {
+        out.push({ t: "AI Explanation", c: "No AI assessment has been generated for this investigation yet." });
+      } else {
+        const byline = (label: string) =>
+          `${label}${assessment.reviewedBy ? ` by ${assessment.reviewedBy}` : ""}${assessment.reviewedAt ? ` on ${new Date(assessment.reviewedAt).toLocaleDateString()}` : ""}`;
+
+        if (assessment.reviewStatus === "REJECTED") {
+          out.push({
+            t: "AI Explanation",
+            ai: {
+              tone: "rejected",
+              badgeLabel: "Rejected",
+              byline: byline("Rejected"),
+              footer: assessment.reviewNote
+                ? `Reason given: "${assessment.reviewNote}"`
+                : `This AI-generated narrative was not accepted and is excluded from this report. (Risk score at time of assessment: ${assessment.riskScore}/100.)`,
+            },
+          });
+        } else if (assessment.reviewStatus === "MODIFIED") {
+          out.push({
+            t: "AI Explanation",
+            ai: {
+              tone: "modified",
+              badgeLabel: "Modified",
+              byline: byline("Modified"),
+              body: assessment.editedExplanation,
+              steps: parseSteps(assessment.editedRecommendedNext),
+              footer: `Risk score at time of assessment: ${assessment.riskScore}/100. This is the investigator-edited version of the original AI-generated narrative.`,
+            },
+          });
+        } else if (assessment.reviewStatus === "ACCEPTED") {
+          out.push({
+            t: "AI Explanation",
+            ai: {
+              tone: "accepted",
+              badgeLabel: "Accepted",
+              byline: byline("Accepted"),
+              body: assessment.explanation,
+              steps: parseSteps(assessment.recommendedNext),
+              footer: `Risk score at time of assessment: ${assessment.riskScore}/100.`,
+            },
+          });
+        } else {
+          out.push({
+            t: "AI Explanation",
+            ai: {
+              tone: "pending",
+              badgeLabel: "Pending Review",
+              body: assessment.explanation,
+              steps: parseSteps(assessment.recommendedNext),
+              footer: `Risk score at time of assessment: ${assessment.riskScore}/100. This assessment has not yet been reviewed by an investigator.`,
+            },
+          });
+        }
+      }
+    }
 
     if (checked["Audit Information"]) out.push({
       t: "Audit Information",
@@ -222,7 +293,45 @@ export function ReportsScreen() {
               {buildSections().map(s=>(
                 <div key={s.t} style={{marginBottom:20}}>
                   <div style={{fontSize:10.5,fontWeight:700,color:"var(--accent-hi)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:7}}>{s.t}</div>
-                  <div style={{fontSize:12.5,color:"var(--text-2)",lineHeight:1.72}}>{s.c}</div>
+
+                  {s.ai ? (
+                    <div>
+                      <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:10}}>
+                        <span className={`badge ${
+                          s.ai.tone === "accepted" ? "badge-low" :
+                          s.ai.tone === "rejected" ? "badge-critical" :
+                          s.ai.tone === "modified" ? "badge-accent" : "badge-pending"
+                        }`}>{s.ai.badgeLabel}</span>
+                        {s.ai.byline && <span style={{fontSize:11,color:"var(--text-4)"}}>{s.ai.byline}</span>}
+                      </div>
+
+                      {s.ai.body && (
+                        <div style={{fontSize:12.5,color:"var(--text-2)",lineHeight:1.72,marginBottom:s.ai.steps?.length?14:8}}>
+                          {s.ai.body}
+                        </div>
+                      )}
+
+                      {s.ai.steps && s.ai.steps.length > 0 && (
+                        <div style={{marginBottom:10}}>
+                          <div style={{fontSize:11.5,fontWeight:700,color:"var(--text-1)",marginBottom:8}}>Recommended next steps:</div>
+                          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                            {s.ai.steps.map((step,i)=>(
+                              <div key={i} style={{display:"flex",gap:8,fontSize:12,color:"var(--text-2)",lineHeight:1.6}}>
+                                <span style={{color:"var(--accent-hi)",fontWeight:700,flexShrink:0}}>{i+1}.</span>
+                                <span>{step}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {s.ai.footer && (
+                        <div style={{fontSize:11,color:"var(--text-4)",lineHeight:1.6,fontStyle:"italic"}}>{s.ai.footer}</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{fontSize:12.5,color:"var(--text-2)",lineHeight:1.72}}>{s.c}</div>
+                  )}
                 </div>
               ))}
               <div className="ai-strip" style={{marginTop:24}}>

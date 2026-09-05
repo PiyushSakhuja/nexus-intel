@@ -5,6 +5,7 @@ import { computeSimulateScoreDelta } from "../lib/riskEngine.js";
 import { riskToStatus, RISK_THRESHOLDS } from "../lib/riskStatus.js";
 import { computeVendorRisk } from "../lib/vendorRisk.js";
 import { computeEntityRisk } from "../lib/entityRisk.js";
+import { correlateListings, getCorrelationForAlias } from "../lib/entityCorrelation.js";
 import type { ListingInput } from "../lib/riskEngine.js";
 
 export const simulateRouter = Router();
@@ -65,13 +66,11 @@ simulateRouter.post("/event", async (req, res) => {
     (entityDisplayId && (await prisma.entity.findUnique({ where: { displayId: entityDisplayId } }))) ??
     network.entities[0];
 
-  if (entity) {
-    emit("correlation", { entity: entity.alias, confidence: entity.confidence });
-  }
-
-  // 3. Risk bump — deterministic function of the correlated entity's risk
-  // and confidence. Prefers computed (listing-evidence-derived) values;
-  // falls back to stored/legacy only when no evidence exists to correlate.
+  // Listings loaded once and reused for both correlation (which listings
+  // belong to this entity, and how confidently) and the risk delta below
+  // (how risky is it) — same data, two intentionally separate computations
+  // per lib/entityCorrelation.ts's design (correlation and risk are never
+  // blended into one formula).
   let deltaInput: { risk: number; confidence: number } | null = null;
   let deltaInputSource: "computed" | "legacy" | "none" = "none";
   if (entity) {
@@ -85,7 +84,23 @@ simulateRouter.post("/event", async (req, res) => {
       vendorAlias: l.vendorAlias,
       firstSeen: l.firstSeen,
       lastSeen: l.lastSeen,
+      shipsFrom: l.shipsFrom,
     }));
+
+    // Emit the richer, explainable correlation result (method +
+    // matchedSignals) when listing evidence exists for this alias;
+    // otherwise fall back to the entity's stored alias/confidence so the
+    // event still fires exactly as before. `entity` and `confidence`
+    // fields are always present for backward compatibility with any
+    // existing consumer of this event.
+    const correlationGroup = getCorrelationForAlias(entity.alias, correlateListings(inputs));
+    emit("correlation", {
+      entity: entity.alias,
+      confidence: correlationGroup?.confidence ?? entity.confidence,
+      method: correlationGroup?.method ?? "none",
+      matchedSignals: correlationGroup?.matchedSignals ?? [],
+    });
+
     const vendorRiskByAlias = computeVendorRisk(inputs);
     const computed = computeEntityRisk(entity.alias, vendorRiskByAlias);
     if (computed.risk !== null && computed.confidence !== null) {
@@ -96,6 +111,8 @@ simulateRouter.post("/event", async (req, res) => {
       deltaInputSource = "legacy";
     }
   }
+  // else: no entity at all — preserved prior behavior of not emitting a
+  // correlation event and leaving deltaInputSource as "none".
 
   const { delta: scoreDelta, explanation: deltaExplanation } = computeSimulateScoreDelta(deltaInput);
   const newNetworkRisk = Math.min(100, network.risk + scoreDelta);

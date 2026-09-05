@@ -17,6 +17,7 @@ async function buildVendorRiskMap(): Promise<Map<string, VendorRisk>> {
     priceUsd: l.priceUsd,
     marketplace: l.marketplace,
     vendorAlias: l.vendorAlias,
+    shipsFrom: l.shipsFrom,
     firstSeen: l.firstSeen,
     lastSeen: l.lastSeen,
   }));

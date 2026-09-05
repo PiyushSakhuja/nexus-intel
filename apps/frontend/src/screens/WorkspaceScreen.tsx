@@ -207,8 +207,24 @@ export function WorkspaceScreen({
   navigate: (s: string, d?: any) => void;
   displayId?: string | null;
 }) {
-  const [note, setNote] = useState("");
-  const [accepted, setAccepted] = useState(false);
+  // ─── Investigator notes (multiple, editable, self-auditing) ─────────────
+  // No real auth in this app yet — mirrors the hardcoded "Investigator A"
+  // shown in the sidebar (components/Layout.tsx). Swap this for the real
+  // logged-in user once auth exists.
+  const CURRENT_USER = "Investigator A";
+
+  const [notes, setNotes] = useState<any[]>([]);
+  const [newNoteText, setNewNoteText] = useState("");
+  const [addingNote, setAddingNote] = useState(false);
+  const [addNoteError, setAddNoteError] = useState<string | null>(null);
+
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editNoteText, setEditNoteText] = useState("");
+  const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
+  const [noteActionError, setNoteActionError] = useState<string | null>(null);
+  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
 
   // ─── Real investigation data ────────────────────────────────────────────
   const [inv, setInv] = useState<any>(investigations[0]);
@@ -248,6 +264,10 @@ export function WorkspaceScreen({
         relatedEntities: (data.entities ?? []).map((ie: any) => ie.entity),
         latestAssessment: data.aiAssessments?.[0] ?? null,
       });
+
+      if (!cancelled) {
+        setNotes(Array.isArray(data.notes) ? data.notes : []);
+      }
     };
 
     load()
@@ -280,7 +300,9 @@ export function WorkspaceScreen({
       if (!res.ok) throw new Error(`API ${res.status}`);
       const data = await res.json();
       setAssessment(data);
-      setAccepted(false);
+      setShowModifyForm(false);
+      setShowRejectForm(false);
+      setReviewError(null);
     } catch (err: any) {
       setAssessError(err.message ?? "Failed to generate AI assessment");
     } finally {
@@ -288,8 +310,150 @@ export function WorkspaceScreen({
     }
   };
 
+  const addNote = async () => {
+    if (!inv?.id || !newNoteText.trim()) return;
+    setAddingNote(true);
+    setAddNoteError(null);
+    try {
+      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: newNoteText.trim(), author: CURRENT_USER }),
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const created = await res.json();
+      setNotes((prev) => [created, ...prev]);
+      setNewNoteText("");
+    } catch (err: any) {
+      setAddNoteError(err.message ?? "Failed to add note");
+    } finally {
+      setAddingNote(false);
+    }
+  };
+
+  const startEditNote = (n: any) => {
+    setEditingNoteId(n.id);
+    setEditNoteText(n.content);
+    setNoteActionError(null);
+  };
+
+  const saveNoteEdit = async (noteId: string) => {
+    if (!inv?.id || !editNoteText.trim()) return;
+    setSavingNoteId(noteId);
+    setNoteActionError(null);
+    try {
+      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/notes/${noteId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: editNoteText.trim(), author: CURRENT_USER }),
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const updated = await res.json();
+      setNotes((prev) => prev.map((n) => (n.id === noteId ? updated : n)));
+      setEditingNoteId(null);
+    } catch (err: any) {
+      setNoteActionError(err.message ?? "Failed to save changes");
+    } finally {
+      setSavingNoteId(null);
+    }
+  };
+
+  const deleteNote = async (noteId: string) => {
+    if (!inv?.id) return;
+    setDeletingNoteId(noteId);
+    setNoteActionError(null);
+    try {
+      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/notes/${noteId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok && res.status !== 204) throw new Error(`API ${res.status}`);
+      setNotes((prev) => prev.filter((n) => n.id !== noteId));
+      setConfirmDeleteId(null);
+    } catch (err: any) {
+      setNoteActionError(err.message ?? "Failed to delete note");
+    } finally {
+      setDeletingNoteId(null);
+    }
+  };
+
+  // ─── AI Assessment review (Accept / Modify / Reject) ────────────────────
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [showModifyForm, setShowModifyForm] = useState(false);
+  const [modifyExplanation, setModifyExplanation] = useState("");
+  const [modifyNextSteps, setModifyNextSteps] = useState("");
+  const [showRejectForm, setShowRejectForm] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+
+  const submitReview = async (action: "ACCEPT" | "MODIFY" | "REJECT" | "RESET", extra: Record<string, any> = {}) => {
+    if (!inv?.id || !assessment?.id) return;
+    setReviewSubmitting(true);
+    setReviewError(null);
+    try {
+      const res = await fetch(
+        `http://localhost:4000/api/investigations/${inv.id}/ai-assessment/${assessment.id}/review`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, reviewedBy: inv.assignee, ...extra }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `API ${res.status}`);
+      }
+      const data = await res.json();
+      setAssessment((prev: any) => ({ ...prev, ...data }));
+      setShowModifyForm(false);
+      setShowRejectForm(false);
+    } catch (err: any) {
+      setReviewError(err.message ?? "Failed to record decision");
+    } finally {
+      setReviewSubmitting(false);
+    }
+  };
+
+  const openModifyForm = () => {
+    setModifyExplanation(assessment?.editedExplanation ?? assessment?.explanation ?? "");
+    let seedSteps: string[] = [];
+    try {
+      seedSteps = assessment?.editedRecommendedNext
+        ? JSON.parse(assessment.editedRecommendedNext)
+        : assessment?.recommendedNext
+        ? JSON.parse(assessment.recommendedNext)
+        : [];
+    } catch {
+      seedSteps = [];
+    }
+    setModifyNextSteps(seedSteps.join("\n"));
+    setShowRejectForm(false);
+    setShowModifyForm(true);
+  };
+
+  const submitModify = () => {
+    if (!modifyExplanation.trim()) return;
+    const editedRecommendedNext = modifyNextSteps
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    submitReview("MODIFY", { editedExplanation: modifyExplanation.trim(), editedRecommendedNext });
+  };
+
+  // When an investigator has MODIFIED the assessment, their edited next
+  // steps are the ones to display — the original AI text is preserved
+  // underneath but is no longer what's shown as "current".
+  const displayExplanation: string =
+    assessment?.reviewStatus === "MODIFIED" && assessment?.editedExplanation
+      ? assessment.editedExplanation
+      : assessment?.explanation ?? "";
+
   const recommendations: string[] = (() => {
-    if (!assessment?.recommendedNext) {
+    const raw =
+      assessment?.reviewStatus === "MODIFIED" && assessment?.editedRecommendedNext
+        ? assessment.editedRecommendedNext
+        : assessment?.recommendedNext;
+
+    if (!raw) {
       return assessment
         ? []
         : [
@@ -300,10 +464,10 @@ export function WorkspaceScreen({
           ];
     }
     try {
-      const parsed = JSON.parse(assessment.recommendedNext);
-      return Array.isArray(parsed) ? parsed : [assessment.recommendedNext];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [raw];
     } catch {
-      return [assessment.recommendedNext];
+      return [raw];
     }
   })();
 
@@ -392,8 +556,131 @@ export function WorkspaceScreen({
           {/* Notes */}
           <div className="card" style={{ padding: 20 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)", marginBottom: 12 }}>Investigator Notes</div>
-            <textarea className="input" style={{ minHeight: 80, resize: "vertical", fontSize: 12.5 }} placeholder="Add investigation notes…" value={note} onChange={e => setNote(e.target.value)} />
-            <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }}>Save Note</button>
+
+            {/* Add new note */}
+            <textarea
+              className="input"
+              style={{ minHeight: 70, resize: "vertical", fontSize: 12.5 }}
+              placeholder="Add a note…"
+              value={newNoteText}
+              onChange={e => setNewNoteText(e.target.value)}
+            />
+            {addNoteError && (
+              <div style={{ fontSize: 11, color: "var(--critical-light)", marginTop: 6 }}>Couldn't add note ({addNoteError}).</div>
+            )}
+            <button
+              className="btn btn-primary btn-sm"
+              style={{ marginTop: 8 }}
+              onClick={addNote}
+              disabled={addingNote || !newNoteText.trim()}
+            >
+              {addingNote ? "Adding…" : "Add Note"}
+            </button>
+
+            {noteActionError && (
+              <div style={{ fontSize: 11, color: "var(--critical-light)", marginTop: 10 }}>{noteActionError}</div>
+            )}
+
+            {/* Note list — newest first, each its own little audit trail */}
+            {notes.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
+                {notes.map((n) => {
+                  const revisions = n.revisions ?? [];
+                  const isEditing = editingNoteId === n.id;
+                  const isConfirmingDelete = confirmDeleteId === n.id;
+                  const isHistoryOpen = expandedHistoryId === n.id;
+
+                  return (
+                    <div key={n.id} className="note-item">
+                      {isEditing ? (
+                        <>
+                          <textarea
+                            className="input"
+                            style={{ minHeight: 60, resize: "vertical", fontSize: 12.5 }}
+                            value={editNoteText}
+                            onChange={e => setEditNoteText(e.target.value)}
+                            autoFocus
+                          />
+                          <div style={{ display: "flex", gap: 7, marginTop: 9 }}>
+                            <button
+                              className="btn btn-primary btn-sm"
+                              onClick={() => saveNoteEdit(n.id)}
+                              disabled={savingNoteId === n.id || !editNoteText.trim()}
+                            >
+                              {savingNoteId === n.id ? "Saving…" : "Save"}
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setEditingNoteId(null)}
+                              disabled={savingNoteId === n.id}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="note-content">{n.content}</div>
+
+                          <div className="note-meta-row">
+                            <div className="note-meta">
+                              Added by {n.createdBy} · {new Date(n.createdAt).toLocaleString()}
+                              {n.updatedBy && (
+                                <div className="edited-tag">
+                                  Edited by {n.updatedBy} · {new Date(n.updatedAt).toLocaleString()}
+                                </div>
+                              )}
+                            </div>
+
+                            {isConfirmingDelete ? (
+                              <div className="note-actions">
+                                <button
+                                  className="icon-btn danger"
+                                  onClick={() => deleteNote(n.id)}
+                                  disabled={deletingNoteId === n.id}
+                                >
+                                  {deletingNoteId === n.id ? "Deleting…" : "✓ Confirm"}
+                                </button>
+                                <button className="icon-btn" onClick={() => setConfirmDeleteId(null)}>
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="note-actions">
+                                {revisions.length > 0 && (
+                                  <button
+                                    className={`icon-btn accent${isHistoryOpen ? " active" : ""}`}
+                                    onClick={() => setExpandedHistoryId(isHistoryOpen ? null : n.id)}
+                                  >
+                                    🕘 {isHistoryOpen ? "Hide" : "History"} ({revisions.length})
+                                  </button>
+                                )}
+                                <button className="icon-btn" onClick={() => startEditNote(n)}>✎ Edit</button>
+                                <button className="icon-btn danger" onClick={() => setConfirmDeleteId(n.id)}>🗑 Delete</button>
+                              </div>
+                            )}
+                          </div>
+
+                          {isHistoryOpen && revisions.length > 0 && (
+                            <div className="note-history">
+                              {revisions.map((rev: any) => (
+                                <div key={rev.id} className="note-history-item">
+                                  <div className="rev-content">{rev.content}</div>
+                                  <div className="rev-meta">
+                                    Written by {rev.author} · {new Date(rev.versionAt).toLocaleString()}
+                                    {" · replaced "}{new Date(rev.supersededAt).toLocaleString()}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
@@ -462,8 +749,13 @@ export function WorkspaceScreen({
                   </div>
                 )}
 
+                {assessment.reviewStatus === "MODIFIED" && assessment.editedExplanation && (
+                  <div style={{ fontSize: 10, color: "var(--accent-hi)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                    Edited by investigator
+                  </div>
+                )}
                 <div style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.65, marginBottom: 12 }}>
-                  {assessment.explanation}
+                  {displayExplanation}
                 </div>
 
                 {assessment.aiGenerated === false && (
@@ -508,22 +800,139 @@ export function WorkspaceScreen({
 
                 <div style={{ fontSize: 11, color: "var(--text-4)", marginBottom: 8 }}>Investigator Decision</div>
 
-                {accepted ? (
-                  <div className="integrity-banner">
-                    <span>✓</span> Recommendations accepted
+                {reviewError && (
+                  <div style={{ fontSize: 11, color: "var(--critical-light)", marginBottom: 8 }}>
+                    Couldn't save decision ({reviewError}).
                   </div>
-                ) : (
+                )}
+
+                {(!assessment.reviewStatus || assessment.reviewStatus === "PENDING") && !showModifyForm && !showRejectForm && (
                   <div style={{ display: "flex", gap: 7 }}>
-                    <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center", fontSize: 11 }} onClick={() => setAccepted(true)}>
+                    <button
+                      className="btn btn-primary"
+                      style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                      onClick={() => submitReview("ACCEPT")}
+                      disabled={reviewSubmitting}
+                    >
                       Accept
                     </button>
-                    <button className="btn btn-ghost" style={{ flex: 1, justifyContent: "center", fontSize: 11 }}>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                      onClick={openModifyForm}
+                      disabled={reviewSubmitting}
+                    >
                       Modify
                     </button>
-                    <button className="btn btn-ghost" style={{ flex: 1, justifyContent: "center", fontSize: 11 }}>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                      onClick={() => { setShowRejectForm(true); setShowModifyForm(false); }}
+                      disabled={reviewSubmitting}
+                    >
                       Reject
                     </button>
                   </div>
+                )}
+
+                {showModifyForm && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ fontSize: 10.5, color: "var(--text-4)" }}>Explanation</div>
+                    <textarea
+                      className="input"
+                      style={{ minHeight: 70, resize: "vertical", fontSize: 12 }}
+                      value={modifyExplanation}
+                      onChange={e => setModifyExplanation(e.target.value)}
+                    />
+                    <div style={{ fontSize: 10.5, color: "var(--text-4)" }}>Recommended next steps (one per line)</div>
+                    <textarea
+                      className="input"
+                      style={{ minHeight: 70, resize: "vertical", fontSize: 12 }}
+                      value={modifyNextSteps}
+                      onChange={e => setModifyNextSteps(e.target.value)}
+                    />
+                    <div style={{ display: "flex", gap: 7 }}>
+                      <button
+                        className="btn btn-primary"
+                        style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                        onClick={submitModify}
+                        disabled={reviewSubmitting || !modifyExplanation.trim()}
+                      >
+                        {reviewSubmitting ? "Saving…" : "Save Changes"}
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                        onClick={() => setShowModifyForm(false)}
+                        disabled={reviewSubmitting}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {showRejectForm && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <textarea
+                      className="input"
+                      style={{ minHeight: 60, resize: "vertical", fontSize: 12 }}
+                      placeholder="Reason for rejecting this assessment (optional)…"
+                      value={rejectReason}
+                      onChange={e => setRejectReason(e.target.value)}
+                    />
+                    <div style={{ display: "flex", gap: 7 }}>
+                      <button
+                        className="btn btn-danger"
+                        style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                        onClick={() => submitReview("REJECT", { reviewNote: rejectReason.trim() })}
+                        disabled={reviewSubmitting}
+                      >
+                        {reviewSubmitting ? "Saving…" : "Confirm Reject"}
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ flex: 1, justifyContent: "center", fontSize: 11 }}
+                        onClick={() => setShowRejectForm(false)}
+                        disabled={reviewSubmitting}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {assessment.reviewStatus && assessment.reviewStatus !== "PENDING" && !showModifyForm && !showRejectForm && (
+                  <>
+                    {assessment.reviewStatus === "ACCEPTED" && (
+                      <div className="integrity-banner">
+                        <span>✓</span> Accepted{assessment.reviewedBy ? ` by ${assessment.reviewedBy}` : ""}
+                      </div>
+                    )}
+                    {assessment.reviewStatus === "MODIFIED" && (
+                      <div className="integrity-banner">
+                        <span>✎</span> Modified{assessment.reviewedBy ? ` by ${assessment.reviewedBy}` : ""}
+                      </div>
+                    )}
+                    {assessment.reviewStatus === "REJECTED" && (
+                      <div style={{ padding: "8px 10px", borderRadius: 7, background: "rgba(220,38,38,0.08)", border: "1px solid rgba(220,38,38,0.2)" }}>
+                        <div style={{ fontSize: 11.5, color: "var(--critical-light)", display: "flex", alignItems: "center", gap: 6 }}>
+                          <span>✕</span> Rejected{assessment.reviewedBy ? ` by ${assessment.reviewedBy}` : ""}
+                        </div>
+                        {assessment.reviewNote && (
+                          <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>{assessment.reviewNote}</div>
+                        )}
+                      </div>
+                    )}
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ marginTop: 8, width: "100%", justifyContent: "center" }}
+                      onClick={() => submitReview("RESET")}
+                      disabled={reviewSubmitting}
+                    >
+                      Change decision
+                    </button>
+                  </>
                 )}
               </>
             )}

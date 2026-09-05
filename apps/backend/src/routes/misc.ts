@@ -56,6 +56,7 @@ listingsRouter.get("/", async (_req, res) => {
     priceUsd: l.priceUsd,
     marketplace: l.marketplace,
     vendorAlias: l.vendorAlias,
+    shipsFrom: l.shipsFrom,
     firstSeen: l.firstSeen,
     lastSeen: l.lastSeen,
   }));

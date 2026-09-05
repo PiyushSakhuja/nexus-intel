@@ -14,6 +14,19 @@ datasource db {
 
 
 
+// Editable prompt configuration for LLM-backed features, so the prompt
+// text is a data row an investigator/admin can tune rather than a string
+// buried in application code. `template` supports {{placeholder}} tokens
+// that the calling code fills in (see lib/investigationAssessment.ts).
+model PromptTemplate {
+  id                String   @id @default(cuid())
+  key               String   @unique // e.g. "ai_assessment"
+  systemInstruction String   @db.Text
+  template          String   @db.Text
+  updatedAt         DateTime @updatedAt
+  updatedBy         String?
+}
+
 enum SourceAccess {
   AUTHORIZED
   PUBLIC
@@ -178,6 +191,38 @@ model Investigation {
   evidence    EvidenceRecord[]
   timeline    CaseTimelineEvent[]
   aiAssessments AiAssessment[]
+  notes       InvestigationNote[]
+}
+
+// A single investigator note on a case. Multiple notes per investigation,
+// newest first — each one carries who added it and when, and (if it's ever
+// edited) who last edited it and when. Past versions are preserved in
+// `revisions` below, so an edit never destroys what was there before.
+model InvestigationNote {
+  id              String   @id @default(cuid())
+  investigationId String
+  investigation   Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  content         String   @db.Text
+  createdBy       String
+  createdAt       DateTime @default(now())
+  updatedBy       String?  // null until the note is edited for the first time
+  updatedAt       DateTime @updatedAt
+
+  revisions       InvestigationNoteRevision[]
+}
+
+// A snapshot of a note's content right before it was overwritten by an
+// edit. Written by the PATCH /notes/:noteId route BEFORE applying the new
+// content, so `content`/`author`/`versionAt` here describe the version that
+// was just replaced — this is what "view edit history" reads from.
+model InvestigationNoteRevision {
+  id       String   @id @default(cuid())
+  noteId   String
+  note     InvestigationNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  content  String   @db.Text
+  author   String   // who wrote this version of the content
+  versionAt DateTime // when this version was created/last touched (its old createdAt/updatedAt)
+  supersededAt DateTime @default(now()) // when this version was replaced by an edit
 }
 
 model InvestigationEntity {
@@ -192,6 +237,13 @@ model InvestigationEntity {
 // AI Assessment: generated FROM structured risk-engine signals, never the
 // other way around. Store the signals alongside the generated text so the
 // explanation is always traceable back to real numbers.
+enum AssessmentReviewStatus {
+  PENDING   // not yet reviewed by an investigator
+  ACCEPTED  // investigator accepted the AI narrative/next-steps as-is
+  MODIFIED  // investigator kept the assessment but edited the text
+  REJECTED  // investigator rejected the AI narrative/next-steps
+}
+
 model AiAssessment {
   id              String   @id @default(cuid())
   investigationId String
@@ -201,6 +253,18 @@ model AiAssessment {
   explanation     String   @db.Text
   recommendedNext String?  @db.Text
   createdAt       DateTime @default(now())
+
+  // ── Investigator review (Accept / Modify / Reject) ──────────────────────
+  // The original explanation/recommendedNext above are NEVER overwritten —
+  // they stay as the AI actually produced them. When an investigator edits
+  // the text ("Modify"), the edit is stored separately below so there's
+  // always a clean AI-generated-vs-investigator-edited distinction.
+  reviewStatus          AssessmentReviewStatus @default(PENDING)
+  editedExplanation     String?  @db.Text
+  editedRecommendedNext String?  @db.Text
+  reviewNote            String?  @db.Text // optional reason, mainly used on REJECTED
+  reviewedBy            String?
+  reviewedAt            DateTime?
 }
 
 // ─── Evidence ────────────────────────────────────────────────────────────

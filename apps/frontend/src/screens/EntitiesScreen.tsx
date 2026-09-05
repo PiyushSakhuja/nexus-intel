@@ -78,11 +78,18 @@ export function EntitiesScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
                     <RiskBadge score={e.risk}/>
                   </div>
                 </td>
-                <td>{e.confidence}%</td>
-                <td><span style={{fontSize:11,color:"var(--text-3)"}}>{e.identifiers?.length ?? 0} identifiers</span></td>
-                <td>{new Date(e.firstSeen).toLocaleDateString()}</td>
-                <td>{new Date(e.lastSeen).toLocaleDateString()}</td>
-                <td><span style={{color:"var(--low-light)",fontWeight:600}}>+{e.riskChange}</span></td>
+                <td>{e.confidence != null ? `${e.confidence}%` : "—"}</td>
+                <td>
+                  <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                    <span style={{fontSize:11,color:"var(--text-3)"}}>{e.identifiers?.length ?? 0} identifiers</span>
+                    {e.correlation?.confidence > 0 && (
+                      <span style={{fontSize:10,color:"var(--accent-hi)"}}>Correlated · {e.correlation.confidence}% conf.</span>
+                    )}
+                  </div>
+                </td>
+                <td>{e.firstSeen ? new Date(e.firstSeen).toLocaleDateString() : "—"}</td>
+                <td>{e.lastSeen ? new Date(e.lastSeen).toLocaleDateString() : "—"}</td>
+                <td>{e.riskChange != null ? <span style={{color:"var(--low-light)",fontWeight:600}}>+{e.riskChange}</span> : <span style={{color:"var(--text-4)"}}>—</span>}</td>
                 <td onClick={ev=>ev.stopPropagation()}>
                   <div style={{display:"flex",gap:6}}>
                     <button className="btn btn-primary btn-sm" onClick={()=>navigate("entity",e)}>Profile</button>

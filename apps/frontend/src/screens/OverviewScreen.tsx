@@ -255,7 +255,7 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
             <thead><tr><th>Network ID</th><th>Risk</th><th>Change</th><th>Entities</th><th>Last Activity</th></tr></thead>
             <tbody>
               {liveNetworks.map(n=>(
-                <tr key={n.id} onClick={()=>navigate("network-risk")}>
+                <tr key={n.id} onClick={()=>navigate("network-risk", n.id)}>
                   <td><span className="mono" style={{color:"var(--accent-hi)",fontSize:12}}>{n.id}</span></td>
                   <td>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>

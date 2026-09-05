@@ -2,13 +2,14 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { computeVendorRisk, type VendorRisk } from "../lib/vendorRisk.js";
 import { computeEntityRisk } from "../lib/entityRisk.js";
+import { correlateListings, getCorrelationForAlias, type CorrelationResult } from "../lib/entityCorrelation.js";
 import type { ListingInput } from "../lib/riskEngine.js";
 
 export const entitiesRouter = Router();
 
-async function buildVendorRiskMap(): Promise<Map<string, VendorRisk>> {
+async function buildListingInputs(): Promise<ListingInput[]> {
   const listings = await prisma.listing.findMany();
-  const inputs: ListingInput[] = listings.map((l) => ({
+  return listings.map((l) => ({
     id: l.id,
     category: l.category,
     title: l.title,
@@ -17,8 +18,20 @@ async function buildVendorRiskMap(): Promise<Map<string, VendorRisk>> {
     vendorAlias: l.vendorAlias,
     firstSeen: l.firstSeen,
     lastSeen: l.lastSeen,
+    shipsFrom: l.shipsFrom,
   }));
-  return computeVendorRisk(inputs);
+}
+
+async function buildVendorRiskMap(): Promise<Map<string, VendorRisk>> {
+  return computeVendorRisk(await buildListingInputs());
+}
+
+// Correlation is intentionally computed independently of vendor/entity
+// risk (see lib/entityCorrelation.ts header): it answers "which listings
+// belong together", never "how risky is this". Reused as-is by the
+// simulation pipeline (routes/simulate.ts) so the two never disagree.
+async function buildCorrelationResult(): Promise<CorrelationResult> {
+  return correlateListings(await buildListingInputs());
 }
 
 // Attaches a `computed` block (honest, listing-evidence-derived — see
@@ -29,9 +42,38 @@ async function buildVendorRiskMap(): Promise<Map<string, VendorRisk>> {
 // this change silently overwrites or removes existing fields.
 function attachComputedRisk(
   entity: { alias: string; risk: number; confidence: number; riskChange: number; [key: string]: unknown },
-  vendorRiskByAlias: Map<string, VendorRisk>
+  vendorRiskByAlias: Map<string, VendorRisk>,
+  correlationResult: CorrelationResult
 ) {
   const computed = computeEntityRisk(entity.alias, vendorRiskByAlias);
+
+  // Additive field only — does not replace or feed into risk/confidence
+  // above, which remain entirely owned by lib/entityRisk.ts. Correlation
+  // answers "which listings make up this entity"; risk answers "how risky
+  // is it" — see lib/entityCorrelation.ts header for why these stay separate.
+  const correlationGroup = getCorrelationForAlias(entity.alias, correlationResult);
+  const correlation = correlationGroup
+    ? {
+        method: correlationGroup.method,
+        confidence: correlationGroup.confidence,
+        matchedSignals: correlationGroup.matchedSignals,
+        signalDetails: correlationGroup.signalDetails,
+        correlatedListings: correlationGroup.listingCount,
+        rawAliasVariants: correlationGroup.rawAliasVariants,
+        marketplaces: correlationGroup.marketplaces,
+        explanation: correlationGroup.explanation,
+      }
+    : {
+        method: "multi_signal_correlation" as const,
+        confidence: 0,
+        matchedSignals: [] as const,
+        signalDetails: [] as const,
+        correlatedListings: 0,
+        rawAliasVariants: [] as const,
+        marketplaces: [] as const,
+        explanation: "No listing carries a vendorAlias that normalizes to match this entity's alias.",
+      };
+
   return {
     ...entity,
       risk: computed.risk ?? entity.risk,
@@ -49,6 +91,7 @@ function attachComputedRisk(
       evidence: computed.evidence,
       explanation: computed.explanation,
     },
+    correlation,
     legacy: {
       risk: entity.risk,
       confidence: entity.confidence,
@@ -60,23 +103,24 @@ function attachComputedRisk(
 
 // GET /api/entities — list, matches the Entities screen table
 entitiesRouter.get("/", async (_req, res) => {
-  const [entities, vendorRiskByAlias] = await Promise.all([
+  const [entities, vendorRiskByAlias, correlationResult] = await Promise.all([
     prisma.entity.findMany({
       include: { identifiers: true, network: true },
     }),
     buildVendorRiskMap(),
+    buildCorrelationResult(),
   ]);
   const calculatedEntities = entities.map((e) =>
-  attachComputedRisk(e, vendorRiskByAlias)
+  attachComputedRisk(e, vendorRiskByAlias, correlationResult)
 );
 
 calculatedEntities.sort((a, b) => b.risk - a.risk);
-  res.json(entities.map((e) => attachComputedRisk(e, vendorRiskByAlias)));
+  res.json(calculatedEntities);
 });
 
 // GET /api/entities/:displayId — entity profile page
 entitiesRouter.get("/:displayId", async (req, res) => {
-  const [entity, vendorRiskByAlias] = await Promise.all([
+  const [entity, vendorRiskByAlias, correlationResult] = await Promise.all([
     prisma.entity.findUnique({
       where: { displayId: req.params.displayId },
       include: {
@@ -88,7 +132,8 @@ entitiesRouter.get("/:displayId", async (req, res) => {
       },
     }),
     buildVendorRiskMap(),
+    buildCorrelationResult(),
   ]);
   if (!entity) return res.status(404).json({ error: "Entity not found" });
-  res.json(attachComputedRisk(entity, vendorRiskByAlias));
+  res.json(attachComputedRisk(entity, vendorRiskByAlias, correlationResult));
 });
