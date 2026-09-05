@@ -12,6 +12,8 @@ import { investigationsRouter } from "./routes/investigations.js";
 import { graphRouter } from "./routes/graph.js";
 import { simulateRouter } from "./routes/simulate.js";
 import { vendorsRouter } from "./routes/vendors.js";
+import { dashboardRouter, analyticsRouter } from "./routes/Dashboard.js";
+import { searchRouter } from "./routes/search.js";
 import {
   evidenceRouter,
   walletsRouter,
@@ -41,6 +43,19 @@ app.use("/api/listings", listingsRouter);
 app.use("/api/vendors", vendorsRouter);
 app.use("/api/audit-log", auditRouter);
 app.use("/api/sources", sourcesRouter);
+app.use("/api/dashboard", dashboardRouter);
+app.use("/api/analytics", analyticsRouter);
+app.use("/api/search", searchRouter);
+
+// Global error handler — without this, an unhandled exception in any route
+// (e.g. a DB outage, a bad Prisma query) crashes out to Express's bare
+// default handler, which sends an HTML stack trace instead of the JSON
+// error shape every frontend fetch() call already expects and handles.
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("[error]", err);
+  if (res.headersSent) return;
+  res.status(500).json({ error: "Internal server error. Please try again." });
+});
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: FRONTEND_URL } });

@@ -1,5 +1,4 @@
 import { useState, useCallback } from "react";
-import { entities } from "./data";
 
 import { LoginScreen } from "./components/Login";
 import { Sidebar, Topbar } from "./components/Layout";
@@ -30,9 +29,10 @@ import { AdminScreen } from "./screens/AdminScreen";
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [screen, setScreen] = useState("overview");
-  const [entityData, setEntityData] = useState(entities[0]);
+  const [entityData, setEntityData] = useState<any | null>(null);
   const [workspaceDisplayId, setWorkspaceDisplayId] = useState<string | null>(null);
   const [networkDisplayId, setNetworkDisplayId] = useState<string | null>(null);
+  const [timelineDisplayId, setTimelineDisplayId] = useState<string | null>(null);
   const navigate = useCallback((s: string, data?: any) => {
     if (s === "entity" && data) {
       setEntityData(data);
@@ -46,7 +46,15 @@ export default function App() {
 
       if (displayId) {
         setWorkspaceDisplayId(displayId);
+        // The workspace is the natural anchor for "which case is this
+        // Timeline for" — keep them pointed at the same investigation.
+        setTimelineDisplayId(displayId);
       }
+    }
+
+    if (s === "timeline" && data) {
+      const displayId = typeof data === "string" ? data : data.displayId ?? data.id;
+      if (displayId) setTimelineDisplayId(displayId);
     }
 
     if (s === "network-risk" && data) {
@@ -75,7 +83,7 @@ export default function App() {
       case "search": return <SearchScreen navigate={navigate} />;
       case "alerts": return <AlertsScreen navigate={navigate} />;
       case "entities": return <EntitiesScreen navigate={navigate} />;
-      case "entity": return <EntityScreen entity={entityData} navigate={navigate} />;
+      case "entity": return entityData ? <EntityScreen entity={entityData} navigate={navigate} /> : <EntitiesScreen navigate={navigate} />;
       case "graph": return <GraphScreen navigate={navigate} />;
       case "network-risk": return <NetworkRiskScreen navigate={navigate} displayId={networkDisplayId} />;
       case "listings": return <ListingsScreen />;
@@ -88,7 +96,7 @@ export default function App() {
             displayId={workspaceDisplayId}
           />
         );
-      case "timeline": return <TimelineScreen navigate={navigate} />;
+      case "timeline": return <TimelineScreen navigate={navigate} displayId={timelineDisplayId} />;
       case "evidence": return <EvidenceScreen />;
       case "analytics": return <AnalyticsScreen />;
       case "reports": return <ReportsScreen />;

@@ -1,4 +1,4 @@
-import { riskColor, riskColorLight, riskLabel, caseTimeline } from "../data";
+import { riskColor, riskColorLight, riskLabel } from "../data";
 
 // Small shared presentational components used across multiple screens.
 
@@ -103,7 +103,26 @@ export function BarContrib({ label, value, max = 28, color }: { label: string; v
   );
 }
 
-export function TimelineView({ events = caseTimeline }: { events?: typeof caseTimeline }) {
+export interface TimelineEvent {
+  date: string;
+  time: string;
+  label: string;
+  type: string;
+  source: string;
+  agent: string;
+  desc: string;
+  color: string;
+}
+
+export function TimelineView({ events }: { events: TimelineEvent[] }) {
+  if (!events || events.length === 0) {
+    return (
+      <div style={{textAlign:"center",padding:"60px 0",color:"var(--text-4)"}}>
+        <div style={{fontSize:32,marginBottom:12,opacity:0.3}}>◷</div>
+        <div>No timeline events recorded for this investigation yet.</div>
+      </div>
+    );
+  }
   return (
     <div style={{maxWidth:680}}>
       {events.map((ev,i)=>(

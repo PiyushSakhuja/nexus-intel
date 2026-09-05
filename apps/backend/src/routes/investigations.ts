@@ -3,46 +3,10 @@ import { prisma } from "../lib/prisma.js";
 import { getIo } from "../sockets/io.js";
 import { generateInvestigationAssessment } from "../lib/investigationAssessment.js";
 import { DEFAULT_MODEL, MODEL_OPTIONS, type SupportedModel } from "../lib/llmClient.js";
+import { logAudit, ipFromRequest } from "../lib/audit.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const investigationsRouter = Router();
-
-// POST /api/investigations — create a new investigation
-investigationsRouter.post("/", async (req, res) => {
-  const { title, description, priority, status, assignee } = req.body as {
-    title?: string; description?: string; priority?: string; status?: string; assignee?: string;
-  };
-  if (!title?.trim() || !description?.trim()) {
-    return res.status(400).json({ error: "title and description are required" });
-  }
-  const validPriorities = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
-  const validStatuses = ["UNDER_INVESTIGATION", "UNDER_REVIEW", "MONITORING", "CLOSED"];
-  const safePriority = validPriorities.includes(priority ?? "") ? priority! : "MEDIUM";
-  const safeStatus = validStatuses.includes(status ?? "") ? status! : "UNDER_INVESTIGATION";
-
-  // Generate a display ID like INV-2026-XXX
-  const count = await prisma.investigation.count();
-  const displayId = `INV-2026-${String(count + 1).padStart(3, "0")}`;
-
-  const inv = await prisma.investigation.create({
-    data: {
-      displayId,
-      title: title.trim(),
-      description: description.trim(),
-      priority: safePriority as any,
-      status: safeStatus as any,
-      assignee: assignee?.trim() || "Unassigned",
-    },
-  });
-  res.status(201).json(inv);
-});
-
-// DELETE /api/investigations/:displayId
-investigationsRouter.delete("/:displayId", async (req, res) => {
-  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
-  if (!inv) return res.status(404).json({ error: "Investigation not found" });
-  await prisma.investigation.delete({ where: { id: inv.id } });
-  res.status(204).send();
-});
 
 investigationsRouter.get("/", async (_req, res) => {
   const investigations = await prisma.investigation.findMany({
@@ -50,75 +14,6 @@ investigationsRouter.get("/", async (_req, res) => {
     orderBy: { updatedAt: "desc" },
   });
   res.json(investigations);
-});
-
-// PATCH /api/investigations/:displayId — update assignee, status, priority, etc.
-investigationsRouter.patch("/:displayId", async (req, res) => {
-  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
-  if (!inv) return res.status(404).json({ error: "Investigation not found" });
-
-  const { assignee, status, priority, title, description } = req.body as {
-    assignee?: string; status?: string; priority?: string; title?: string; description?: string;
-  };
-  const validStatuses = ["UNDER_INVESTIGATION", "UNDER_REVIEW", "MONITORING", "CLOSED"];
-  const validPriorities = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
-
-  const data: any = {};
-  if (assignee !== undefined) data.assignee = assignee.trim();
-  if (status !== undefined && validStatuses.includes(status)) data.status = status as any;
-  if (priority !== undefined && validPriorities.includes(priority)) data.priority = priority as any;
-  if (title !== undefined) data.title = title.trim();
-  if (description !== undefined) data.description = description.trim();
-
-  const updated = await prisma.investigation.update({ where: { id: inv.id }, data });
-  res.json(updated);
-});
-
-// POST /api/investigations/:displayId/entities — link an entity to an investigation
-investigationsRouter.post("/:displayId/entities", async (req, res) => {
-  const { entityId } = req.body as { entityId?: string };
-  if (!entityId) return res.status(400).json({ error: "entityId is required" });
-
-  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
-  if (!inv) return res.status(404).json({ error: "Investigation not found" });
-
-  const entity = await prisma.entity.findUnique({ where: { id: entityId } });
-  if (!entity) return res.status(404).json({ error: "Entity not found" });
-
-  try {
-    const link = await prisma.investigationEntity.create({
-      data: { investigationId: inv.id, entityId: entity.id },
-      include: { entity: true },
-    });
-    res.status(201).json(link);
-  } catch (e: any) {
-    if (e.code === "P2002") return res.status(409).json({ error: "Entity already linked to this investigation" });
-    throw e;
-  }
-});
-
-// POST /api/investigations/:displayId/evidence — add an evidence record
-investigationsRouter.post("/:displayId/evidence", async (req, res) => {
-  const { type, source } = req.body as { type?: string; source?: string };
-  if (!type || !source?.trim()) return res.status(400).json({ error: "type and source are required" });
-
-  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
-  if (!inv) return res.status(404).json({ error: "Investigation not found" });
-
-  const count = await prisma.evidenceRecord.count({ where: { investigationId: inv.id } });
-  const displayId = `EV-${String(count + 1).padStart(4, "0")}`;
-
-  const evidence = await prisma.evidenceRecord.create({
-    data: {
-      displayId,
-      investigationId: inv.id,
-      type: type.trim(),
-      uploadedBy: "Investigator A",
-      status: "PENDING",
-      hash: `sha256-${Math.random().toString(36).slice(2, 18)}`,
-    },
-  });
-  res.status(201).json(evidence);
 });
 
 investigationsRouter.get("/:displayId", async (req, res) => {
@@ -131,6 +26,23 @@ investigationsRouter.get("/:displayId", async (req, res) => {
       aiAssessments: { orderBy: { createdAt: "desc" } },
       notes: { orderBy: { createdAt: "desc" }, include: { revisions: { orderBy: { supersededAt: "desc" } } } },
       network: true,
+    },
+  });
+  if (!inv) return res.status(404).json({ error: "Investigation not found" });
+  res.json(inv);
+});
+
+// GET /api/investigations/:displayId/timeline — standalone timeline route.
+// The full investigation fetch already nests `timeline`, but screens that
+// only need the timeline (TimelineScreen) shouldn't have to pull the whole
+// investigation graph just to render it.
+investigationsRouter.get("/:displayId/timeline", async (req, res) => {
+  const inv = await prisma.investigation.findUnique({
+    where: { displayId: req.params.displayId },
+    select: {
+      displayId: true,
+      title: true,
+      timeline: { orderBy: { occurredAt: "asc" } },
     },
   });
   if (!inv) return res.status(404).json({ error: "Investigation not found" });
@@ -150,7 +62,7 @@ investigationsRouter.get("/:displayId", async (req, res) => {
 // it never invents the number itself. If the LLM is unreachable/unconfigured,
 // the assessment is still generated and stored using a clearly-labeled
 // deterministic fallback narrative (aiGenerated: false).
-investigationsRouter.post("/:displayId/ai-assessment", async (req, res) => {
+investigationsRouter.post("/:displayId/ai-assessment", asyncHandler(async (req, res) => {
   const inv = await prisma.investigation.findUnique({
     where: { displayId: req.params.displayId },
     include: {
@@ -201,6 +113,14 @@ investigationsRouter.post("/:displayId/ai-assessment", async (req, res) => {
     },
   });
 
+  await logAudit({
+    user: "System",
+    action: `Generated AI Assessment (${result.modelUsed})`,
+    resource: inv.displayId,
+    type: "write",
+    ip: ipFromRequest(req),
+  });
+
   // Best-effort — mirrors simulate.ts's live-feed broadcast pattern.
   try {
     getIo().emit("intelligence-event", {
@@ -218,7 +138,7 @@ investigationsRouter.post("/:displayId/ai-assessment", async (req, res) => {
   }
 
   res.status(201).json({ ...assessment, aiGenerated: result.aiGenerated, modelUsed: result.modelUsed });
-});
+}));
 
 // PATCH /api/investigations/:displayId/ai-assessment/:assessmentId/review
 //
@@ -237,7 +157,7 @@ investigationsRouter.post("/:displayId/ai-assessment", async (req, res) => {
 const REVIEW_ACTIONS = ["ACCEPT", "MODIFY", "REJECT", "RESET"] as const;
 type ReviewAction = (typeof REVIEW_ACTIONS)[number];
 
-investigationsRouter.patch("/:displayId/ai-assessment/:assessmentId/review", async (req, res) => {
+investigationsRouter.patch("/:displayId/ai-assessment/:assessmentId/review", asyncHandler(async (req, res) => {
   const { action, editedExplanation, editedRecommendedNext, reviewNote, reviewedBy } = req.body as {
     action?: string;
     editedExplanation?: string;
@@ -295,6 +215,14 @@ investigationsRouter.patch("/:displayId/ai-assessment/:assessmentId/review", asy
     },
   });
 
+  await logAudit({
+    user: reviewedBy?.trim() || inv.assignee,
+    action: `${reviewStatus[action as "ACCEPT" | "MODIFY" | "REJECT"]} AI Assessment`,
+    resource: inv.displayId,
+    type: "write",
+    ip: ipFromRequest(req),
+  });
+
   try {
     getIo().emit("intelligence-event", {
       type: "ai_assessment_reviewed",
@@ -306,7 +234,7 @@ investigationsRouter.patch("/:displayId/ai-assessment/:assessmentId/review", asy
   }
 
   res.status(200).json(assessment);
-});
+}));
 
 // ── Investigator notes (multiple, editable, self-auditing) ────────────────
 //
@@ -318,7 +246,7 @@ investigationsRouter.patch("/:displayId/ai-assessment/:assessmentId/review", asy
 // POST /api/investigations/:displayId/notes
 // Body: { content: string, author?: string } — author defaults to the
 // investigation's assignee (no real auth in this app yet).
-investigationsRouter.post("/:displayId/notes", async (req, res) => {
+investigationsRouter.post("/:displayId/notes", asyncHandler(async (req, res) => {
   const { content, author } = req.body as { content?: string; author?: string };
   if (!content?.trim()) return res.status(400).json({ error: "content is required" });
 
@@ -333,8 +261,16 @@ investigationsRouter.post("/:displayId/notes", async (req, res) => {
     },
   });
 
+  await logAudit({
+    user: author?.trim() || inv.assignee,
+    action: "Added Note",
+    resource: inv.displayId,
+    type: "write",
+    ip: ipFromRequest(req),
+  });
+
   res.status(201).json(note);
-});
+}));
 
 // PATCH /api/investigations/:displayId/notes/:noteId
 // Body: { content: string, author?: string } — author is who's editing,
@@ -344,7 +280,7 @@ investigationsRouter.post("/:displayId/notes", async (req, res) => {
 // InvestigationNoteRevision — so editing a note never destroys the
 // previous text, it just supersedes it. That's what "view edit history"
 // on the frontend reads from.
-investigationsRouter.patch("/:displayId/notes/:noteId", async (req, res) => {
+investigationsRouter.patch("/:displayId/notes/:noteId", asyncHandler(async (req, res) => {
   const { content, author } = req.body as { content?: string; author?: string };
   if (!content?.trim()) return res.status(400).json({ error: "content is required" });
 
@@ -382,11 +318,19 @@ investigationsRouter.patch("/:displayId/notes/:noteId", async (req, res) => {
     }),
   ]);
 
+  await logAudit({
+    user: author?.trim() || inv.assignee,
+    action: "Edited Note",
+    resource: inv.displayId,
+    type: "write",
+    ip: ipFromRequest(req),
+  });
+
   res.status(200).json(note);
-});
+}));
 
 // DELETE /api/investigations/:displayId/notes/:noteId
-investigationsRouter.delete("/:displayId/notes/:noteId", async (req, res) => {
+investigationsRouter.delete("/:displayId/notes/:noteId", asyncHandler(async (req, res) => {
   const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
   if (!inv) return res.status(404).json({ error: "Investigation not found" });
 
@@ -396,5 +340,36 @@ investigationsRouter.delete("/:displayId/notes/:noteId", async (req, res) => {
   }
 
   await prisma.investigationNote.delete({ where: { id: existing.id } });
+
+  await logAudit({
+    user: inv.assignee,
+    action: "Deleted Note",
+    resource: inv.displayId,
+    type: "write",
+    ip: ipFromRequest(req),
+  });
+
   res.status(204).send();
-});
+}));
+
+// POST /api/investigations/:displayId/report-generated
+// Called by ReportsScreen right after it successfully compiles a report, so
+// "report generated" is a real audited action instead of a claim the
+// report text makes without anything backing it.
+investigationsRouter.post("/:displayId/report-generated", asyncHandler(async (req, res) => {
+  const { generatedBy, reportType, classification } = req.body as {
+    generatedBy?: string; reportType?: string; classification?: string;
+  };
+  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
+  if (!inv) return res.status(404).json({ error: "Investigation not found" });
+
+  await logAudit({
+    user: generatedBy?.trim() || "System",
+    action: `Generated Report${reportType ? ` (${reportType}${classification ? `, ${classification}` : ""})` : ""}`,
+    resource: inv.displayId,
+    type: "export",
+    ip: ipFromRequest(req),
+  });
+
+  res.status(201).json({ ok: true });
+}));

@@ -1,39 +1,16 @@
-import { useState, useEffect, useRef } from "react";
-import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
-import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
-} from "../data";
-import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
-  PulseIndicator, BarContrib, TimelineView,
-} from "../components/shared";
-import { getSocket, EVENT_META } from "../lib/socket";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+import { useState, useEffect } from "react";
+import { apiGet } from "../lib/api";
 
 export function AuditScreen() {
   const typeColors: Record<string,string> = {read:"var(--accent)",write:"var(--low-light)",export:"var(--cyan)",admin:"var(--medium-light)",system:"var(--text-3)",search:"var(--purple)"};
-  const [auditRows, setAuditRows] = useState<any[]>(auditLog);
+  const [auditRows, setAuditRows] = useState<any[]>([]);
   const [auditLoading, setAuditLoading] = useState(true);
   const [auditError, setAuditError] = useState<string|null>(null);
   const [activeFilter, setActiveFilter] = useState("All");
   const [searchText, setSearchText] = useState("");
 
   useEffect(() => {
-    fetch("http://localhost:4000/api/audit-log")
-      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+    apiGet<any[]>("/api/audit-log")
       .then(data => {
         const normalised = data.map((entry: any) => ({
           ...entry,
@@ -104,7 +81,7 @@ export function AuditScreen() {
       </div>
 
       {auditLoading && <p className="page-sub" style={{marginBottom:12}}>Loading audit log…</p>}
-      {auditError && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({auditError}) — showing demo data.</p>}
+      {auditError && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({auditError}).</p>}
       {!auditLoading && filteredRows.length === 0 && (
         <p className="page-sub" style={{marginBottom:12}}>No audit entries match this filter.</p>
       )}

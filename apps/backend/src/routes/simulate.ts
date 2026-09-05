@@ -7,6 +7,8 @@ import { computeVendorRisk } from "../lib/vendorRisk.js";
 import { computeEntityRisk } from "../lib/entityRisk.js";
 import { correlateListings, getCorrelationForAlias } from "../lib/entityCorrelation.js";
 import type { ListingInput } from "../lib/riskEngine.js";
+import { logAudit, ipFromRequest } from "../lib/audit.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const simulateRouter = Router();
 
@@ -35,11 +37,15 @@ export const simulateRouter = Router();
 //      "transaction_detected") to show — has been replaced with a
 //      deterministic selection based on the real accumulated RiskEvent
 //      count, so no randomness remains anywhere in this route.
-simulateRouter.post("/event", async (req, res) => {
+simulateRouter.post("/event", asyncHandler(async (req, res) => {
   const { networkDisplayId, entityDisplayId } = req.body as {
-    networkDisplayId: string;
+    networkDisplayId?: string;
     entityDisplayId?: string;
   };
+
+  if (!networkDisplayId || !networkDisplayId.trim()) {
+    return res.status(400).json({ error: "networkDisplayId is required" });
+  }
 
   const io = getIo();
   const emit = (type: string, payload: unknown) => io.emit("intelligence-event", { type, payload, at: new Date() });
@@ -143,6 +149,14 @@ simulateRouter.post("/event", async (req, res) => {
 
   emit("risk_updated", { network: network.displayId, from: network.risk, to: newNetworkRisk });
 
+  await logAudit({
+    user: "System",
+    action: "Simulated Incoming Intelligence",
+    resource: network.displayId,
+    type: "system",
+    ip: ipFromRequest(req),
+  });
+
   // 4. Threshold check -> alert generation (the "killer moment")
   let alert = null;
   if (network.risk < RISK_THRESHOLDS.CRITICAL && newNetworkRisk >= RISK_THRESHOLDS.CRITICAL) {
@@ -159,7 +173,14 @@ simulateRouter.post("/event", async (req, res) => {
       },
     });
     emit("alert_generated", alert);
+    await logAudit({
+      user: "System",
+      action: "Alert Generated",
+      resource: alert.displayId,
+      type: "system",
+      ip: ipFromRequest(req),
+    });
   }
 
   res.status(201).json({ riskEvent, network: updatedNetwork, alert, deltaInputSource });
-});
+}));

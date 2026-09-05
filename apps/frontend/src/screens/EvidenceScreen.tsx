@@ -1,33 +1,14 @@
-import { useState, useEffect, useRef } from "react";
-import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
-import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
-} from "../data";
-import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
-  PulseIndicator, BarContrib, TimelineView,
-} from "../components/shared";
-import { getSocket, EVENT_META } from "../lib/socket";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+import { useState, useEffect } from "react";
+import { apiGet, apiPost, apiPatch } from "../lib/api";
 
 export function EvidenceScreen() {
-  const [evidenceRows, setEvidenceRows] = useState<any[]>(evidenceRecords);
+  const [evidenceRows, setEvidenceRows] = useState<any[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(true);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);
   const [sel, setSel] = useState<any | null>(null);
+  const [custody, setCustody] = useState<any[]>([]);
+  const [custodyLoading, setCustodyLoading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
 
   // ── Add Evidence modal state ─────────────────────────────────────────────
   const [showAddModal, setShowAddModal] = useState(false);
@@ -38,8 +19,7 @@ export function EvidenceScreen() {
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const fetchEvidence = () => {
-    fetch("http://localhost:4000/api/evidence")
-      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+    apiGet<any[]>("/api/evidence")
       .then(data => {
         const normalised = data.map((ev: any) => ({
           ...ev,
@@ -63,22 +43,57 @@ export function EvidenceScreen() {
     fetchEvidence();
 
     // Populate the modal's dropdowns once, up front.
-    fetch("http://localhost:4000/api/investigations")
-      .then(res => res.json())
+    apiGet<any[]>("/api/investigations")
       .then(data => setInvOptions(data.map((i: any) => ({
         id: i.id,
         displayId: i.displayId ?? i.id,
         title: i.title,
       }))))
       .catch(() => { });
-    fetch("http://localhost:4000/api/sources")
-      .then(res => res.json())
+    apiGet<any[]>("/api/sources")
       .then(data => {
         setSourceOptions(data.map((s: any) => ({ id: s.id, name: s.name })));
         setForm(f => f.sourceId || !data.length ? f : { ...f, sourceId: data[0].id });
       })
       .catch(() => { });
   }, []);
+
+  // Real chain-of-custody: pulls the audit log entries whose `resource`
+  // matches this evidence record's displayId, instead of three fabricated
+  // "Evidence collected / Integrity verified / Added to case" lines that
+  // always showed the same fixed script regardless of what actually
+  // happened to the record.
+  useEffect(() => {
+    if (!sel) { setCustody([]); return; }
+    setCustodyLoading(true);
+    apiGet<any[]>("/api/audit-log")
+      .then(data => {
+        setCustody(
+          data
+            .filter((entry: any) => entry.resource === sel.id)
+            .sort((a: any, b: any) => new Date(a.createdAt ?? a.ts).getTime() - new Date(b.createdAt ?? b.ts).getTime())
+        );
+      })
+      .catch(() => setCustody([]))
+      .finally(() => setCustodyLoading(false));
+  }, [sel?.id]);
+
+  const verifyEvidence = async (status: "VERIFIED" | "REJECTED") => {
+    if (!sel) return;
+    setVerifying(true);
+    try {
+      const updated = await apiPatch<any>(`/api/evidence/${encodeURIComponent(sel.id)}/status`, {
+        status,
+        reviewedBy: form.uploadedBy || "Investigator A",
+      });
+      setSel((s: any) => s ? { ...s, status: status.charAt(0) + status.slice(1).toLowerCase() } : s);
+      fetchEvidence();
+    } catch (err) {
+      // surfaced inline below rather than blocking the whole screen
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   const openAddModal = () => {
     setSubmitError(null);
@@ -92,12 +107,7 @@ export function EvidenceScreen() {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const res = await fetch("http://localhost:4000/api/evidence", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      if (!res.ok) throw new Error(`API ${res.status}`);
+      await apiPost("/api/evidence", form);
       setShowAddModal(false);
       setForm(f => ({ ...f, content: "" }));
       fetchEvidence(); // refresh the table with the new row
@@ -123,7 +133,8 @@ export function EvidenceScreen() {
       </div>
 
       {evidenceLoading && <p className="page-sub" style={{ marginBottom: 12 }}>Loading evidence…</p>}
-      {evidenceError && <p className="page-sub" style={{ marginBottom: 12, color: "var(--high-light)" }}>Couldn't reach the API ({evidenceError}) — showing demo data.</p>}
+      {evidenceError && <p className="page-sub" style={{ marginBottom: 12, color: "var(--high-light)" }}>Couldn't reach the API ({evidenceError}).</p>}
+      {!evidenceLoading && !evidenceError && evidenceRows.length === 0 && <p className="page-sub" style={{ marginBottom: 12 }}>No evidence recorded yet.</p>}
       <div style={{ display: "grid", gridTemplateColumns: sel ? "1fr 380px" : "1fr", gap: 16, transition: "all 0.25s" }}>
         <div className="card">
           <table className="data-table">
@@ -154,9 +165,19 @@ export function EvidenceScreen() {
 
             <div className="mono" style={{ fontSize: 11, color: "var(--accent-hi)", marginBottom: 12 }}>{sel.id}</div>
 
-            <div className="integrity-banner" style={{ marginBottom: 14 }}>
-              <span style={{ fontSize: 15 }}>✓</span> Integrity Verified
-            </div>
+            {sel.status === "Verified" ? (
+              <div className="integrity-banner" style={{ marginBottom: 14 }}>
+                <span style={{ fontSize: 15 }}>✓</span> Integrity Verified
+              </div>
+            ) : sel.status === "Rejected" ? (
+              <div style={{ marginBottom: 14, padding: "8px 12px", background: "rgba(220,38,38,0.08)", border: "1px solid rgba(220,38,38,0.2)", borderRadius: 7, fontSize: 12, color: "var(--critical-light)", fontWeight: 600 }}>
+                ✕ Rejected
+              </div>
+            ) : (
+              <div style={{ marginBottom: 14, padding: "8px 12px", background: "rgba(217,119,6,0.08)", border: "1px solid rgba(217,119,6,0.2)", borderRadius: 7, fontSize: 12, color: "var(--medium-light)", fontWeight: 600 }}>
+                ◷ Pending Verification
+              </div>
+            )}
 
             {[
               { l: "Type", v: sel.type }, { l: "Source", v: sel.source },
@@ -175,17 +196,24 @@ export function EvidenceScreen() {
             </div>
 
             <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 11, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 10 }}>Chain of Custody</div>
-              {[
-                { ev: "Evidence collected", by: sel.by, ts: sel.ts.split("·")[0].trim() },
-                { ev: "Integrity verified (SHA-256)", by: "System", ts: "Automated" },
-                { ev: "Added to case", by: sel.by, ts: sel.ts.split("·")[0].trim() },
-              ].map((c, i) => (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div style={{ fontSize: 11, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: "0.07em" }}>Chain of Custody</div>
+                {sel.status !== "Verified" && (
+                  <button className="btn btn-ghost btn-sm" disabled={verifying} onClick={() => verifyEvidence("VERIFIED")}>
+                    {verifying ? "Verifying…" : "Mark Verified"}
+                  </button>
+                )}
+              </div>
+              {custodyLoading && <div style={{ fontSize: 11.5, color: "var(--text-4)" }}>Loading custody trail…</div>}
+              {!custodyLoading && custody.length === 0 && (
+                <div style={{ fontSize: 11.5, color: "var(--text-4)" }}>No audit events recorded for this evidence yet.</div>
+              )}
+              {!custodyLoading && custody.map((c, i) => (
                 <div key={i} style={{ display: "flex", gap: 10, marginBottom: 8 }}>
                   <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", marginTop: 4, flexShrink: 0 }} />
                   <div>
-                    <div style={{ fontSize: 11.5, color: "var(--text-2)" }}>{c.ev}</div>
-                    <div style={{ fontSize: 10.5, color: "var(--text-4)" }}>{c.by} · {c.ts}</div>
+                    <div style={{ fontSize: 11.5, color: "var(--text-2)" }}>{c.action}</div>
+                    <div style={{ fontSize: 10.5, color: "var(--text-4)" }}>{c.user} · {c.createdAt ? new Date(c.createdAt).toLocaleString() : c.ts}</div>
                   </div>
                 </div>
               ))}

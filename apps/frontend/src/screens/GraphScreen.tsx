@@ -1,55 +1,39 @@
-import { useState, useEffect, useRef } from "react";
-import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
-import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
-} from "../data";
-import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
-  PulseIndicator, BarContrib, TimelineView,
-} from "../components/shared";
-import { getSocket, EVENT_META } from "../lib/socket";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+import { useState, useEffect } from "react";
+import { getSocket } from "../lib/socket";
+import { apiGet } from "../lib/api";
+import { riskColorLight } from "../data";
+import { RingScore, RiskBadge } from "../components/shared";
 
 export function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
-  const [selected, setSelected] = useState<string|null>("wallet-w1");
+  const [selected, setSelected] = useState<string|null>(null);
   const [riskOverlay, setRiskOverlay] = useState(true);
   const [mode, setMode] = useState<"entity"|"network">("entity");
-  const [liveNodes, setLiveNodes] = useState<any[]>(graphNodes);
-  const [liveEdges, setLiveEdges] = useState<any[]>(graphEdges);
+  const [liveNodes, setLiveNodes] = useState<any[]>([]);
+  const [liveEdges, setLiveEdges] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("http://localhost:4000/api/graph")
-      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+    apiGet<any>("/api/graph")
       .then(({ nodes, edges }) => {
         // GraphNode.type comes back as the Prisma enum ("ENTITY", "WALLET"...)
         // but typeColors/typeIcons below are keyed lowercase — without this
         // the node color/icon lookups silently miss and every node renders
         // with undefined styling.
-        if (nodes?.length) setLiveNodes(nodes.map((n: any) => ({ ...n, type: n.type?.toLowerCase() })));
-        if (edges?.length) {
-          // DB uses fromId/toId; normalise to from/to for SVG rendering
-          setLiveEdges(edges.map((e: any) => ({
-            ...e,
-            from: e.from ?? e.fromId,
-            to: e.to ?? e.toId,
-            label: e.label ?? e.type ?? "",
-          })));
-        }
+        const normNodes = (nodes ?? []).map((n: any) => ({ ...n, type: n.type?.toLowerCase() }));
+        const normEdges = (edges ?? []).map((e: any) => ({
+          ...e,
+          from: e.from ?? e.fromId,
+          to: e.to ?? e.toId,
+          label: e.label ?? e.type ?? "",
+        }));
+        setLiveNodes(normNodes);
+        setLiveEdges(normEdges);
+        if (normNodes.length > 0) setSelected(normNodes[0].id);
+        setError(null);
       })
-      .catch(() => { /* keep mock data on failure */ });
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
   }, []);
 
   const typeColors: Record<string,string> = {entity:"#6366f1",market:"#8b5cf6",listing:"#d97706",wallet:"#06b6d4",comm:"#16a34a",txn:"#ea580c"};
@@ -61,8 +45,19 @@ export function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) 
 
   const getPos = (id: string) => liveNodes.find(n=>n.id===id)||{x:0,y:0};
 
+  if (loading) {
+    return <div style={{padding:"26px 28px"}}><p className="page-sub">Loading network graph…</p></div>;
+  }
+  if (error) {
+    return <div style={{padding:"26px 28px"}}><p className="page-sub" style={{color:"var(--high-light)"}}>Couldn't reach the API ({error}).</p></div>;
+  }
+  if (liveNodes.length === 0) {
+    return <div style={{padding:"26px 28px"}}><p className="page-sub">No graph data available yet.</p></div>;
+  }
+
   return (
     <div style={{display:"flex",height:"calc(100vh - 52px)",overflow:"hidden"}}>
+
       {/* Graph SVG area */}
       <div className="graph-root" style={{background:"radial-gradient(ellipse at 40% 45%, rgba(99,102,241,0.04) 0%, transparent 65%)"}}>
         {/* Toolbar */}
@@ -250,7 +245,11 @@ export function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) 
           </div>
 
           <div style={{display:"flex",flexDirection:"column",gap:7}}>
-            <button className="btn btn-primary" style={{justifyContent:"center"}} onClick={()=>navigate("entity",entities[0])}>View Full Profile</button>
+            <button className="btn btn-primary" style={{justifyContent:"center"}} onClick={()=>{
+              const entityDisplayId = selNode?.entity?.displayId;
+              if (entityDisplayId) navigate("entity", { id: entityDisplayId, displayId: entityDisplayId });
+              else navigate("entities");
+            }}>View Full Profile</button>
             <button className="btn btn-ghost" style={{justifyContent:"center"}} onClick={()=>navigate("network-risk")}>Network Risk Analysis</button>
             <button className="btn btn-ghost" style={{justifyContent:"center"}} onClick={()=>navigate("workspace")}>Add to Investigation</button>
           </div>

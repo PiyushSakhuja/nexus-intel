@@ -2,6 +2,8 @@ import { Router } from "express";
 import crypto from "node:crypto";
 import { prisma } from "../lib/prisma.js";
 import { scoreListings, signalsToDisplayStrings, type ListingInput } from "../lib/riskEngine.js";
+import { logAudit, ipFromRequest } from "../lib/audit.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const evidenceRouter = Router();
 export const walletsRouter = Router();
@@ -18,23 +20,72 @@ evidenceRouter.get("/", async (_req, res) => {
 
 // POST /api/evidence — actually computes a SHA-256 hash of the submitted
 // content, so the "chain of custody" claim is real, not decorative.
-evidenceRouter.post("/", async (req, res) => {
+evidenceRouter.post("/", asyncHandler(async (req, res) => {
   const { type, content, uploadedBy, investigationId, sourceId } = req.body;
+  if (!content || !String(content).trim()) {
+    return res.status(400).json({ error: "content is required — it's what gets hashed" });
+  }
+  if (!investigationId) {
+    return res.status(400).json({ error: "investigationId is required" });
+  }
   const hash = crypto.createHash("sha256").update(content ?? "").digest("hex").toUpperCase();
   const count = await prisma.evidenceRecord.count();
-  const evidence = await prisma.evidenceRecord.create({
-    data: {
-      displayId: `EV-${1000 + count}`,
-      type,
-      hash,
-      uploadedBy,
-      status: "PENDING",
-      investigationId,
-      sourceId,
-    },
+  let evidence;
+  try {
+    evidence = await prisma.evidenceRecord.create({
+      data: {
+        displayId: `EV-${1000 + count}`,
+        type,
+        hash,
+        uploadedBy,
+        status: "PENDING",
+        investigationId,
+        sourceId,
+      },
+    });
+  } catch (err) {
+    return res.status(400).json({ error: `Could not create evidence record: ${(err as Error).message}` });
+  }
+
+  await logAudit({
+    user: uploadedBy || "System",
+    action: "Added Evidence",
+    resource: evidence.displayId,
+    type: "write",
+    ip: ipFromRequest(req),
   });
+
   res.status(201).json(evidence);
-});
+}));
+
+// PATCH /api/evidence/:displayId/status — investigator verification action.
+// This is what makes EvidenceStatus (VERIFIED/PENDING/REJECTED) something an
+// investigator can actually change, rather than a value only ever set once
+// at creation/seed time.
+evidenceRouter.patch("/:displayId/status", asyncHandler(async (req, res) => {
+  const { status, reviewedBy } = req.body as { status?: string; reviewedBy?: string };
+  const VALID = ["VERIFIED", "PENDING", "REJECTED"];
+  if (!status || !VALID.includes(status)) {
+    return res.status(400).json({ error: `status must be one of ${VALID.join(", ")}` });
+  }
+  const existing = await prisma.evidenceRecord.findUnique({ where: { displayId: req.params.displayId } });
+  if (!existing) return res.status(404).json({ error: "Evidence record not found" });
+
+  const evidence = await prisma.evidenceRecord.update({
+    where: { id: existing.id },
+    data: { status: status as any },
+  });
+
+  await logAudit({
+    user: reviewedBy || "System",
+    action: `Evidence marked ${status}`,
+    resource: evidence.displayId,
+    type: "write",
+    ip: ipFromRequest(req),
+  });
+
+  res.json(evidence);
+}));
 
 walletsRouter.get("/", async (_req, res) => {
   res.json(await prisma.wallet.findMany({ orderBy: { risk: "desc" } }));

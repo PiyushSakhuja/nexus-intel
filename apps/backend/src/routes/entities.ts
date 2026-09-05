@@ -4,6 +4,7 @@ import { computeVendorRisk, type VendorRisk } from "../lib/vendorRisk.js";
 import { computeEntityRisk } from "../lib/entityRisk.js";
 import { correlateListings, getCorrelationForAlias, type CorrelationResult } from "../lib/entityCorrelation.js";
 import type { ListingInput } from "../lib/riskEngine.js";
+import { logAudit, ipFromRequest } from "../lib/audit.js";
 
 export const entitiesRouter = Router();
 
@@ -135,5 +136,14 @@ entitiesRouter.get("/:displayId", async (req, res) => {
     buildCorrelationResult(),
   ]);
   if (!entity) return res.status(404).json({ error: "Entity not found" });
+
+  await logAudit({
+    user: "System",
+    action: "Viewed Entity",
+    resource: entity.alias,
+    type: "read",
+    ip: ipFromRequest(req),
+  });
+
   res.json(attachComputedRisk(entity, vendorRiskByAlias, correlationResult));
 });

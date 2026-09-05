@@ -1,37 +1,16 @@
-import { useState, useEffect, useRef } from "react";
-import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
-import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
-} from "../data";
-import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
-  PulseIndicator, BarContrib, TimelineView,
-} from "../components/shared";
-import { getSocket, EVENT_META } from "../lib/socket";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+import { useState, useEffect } from "react";
+import { riskColorLight } from "../data";
+import { RingScore, RiskBadge, PulseIndicator } from "../components/shared";
+import { apiGet } from "../lib/api";
 
 export function BlockchainScreen() {
-  const [walletRows, setWalletRows] = useState<any[]>(wallets);
+  const [walletRows, setWalletRows] = useState<any[]>([]);
   const [walletsLoading, setWalletsLoading] = useState(true);
   const [walletsError, setWalletsError] = useState<string|null>(null);
-  const [sel, setSel] = useState<any>(wallets[0]);
+  const [sel, setSel] = useState<any>(null);
 
   useEffect(() => {
-    fetch("http://localhost:4000/api/wallets")
-      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+    apiGet<any[]>("/api/wallets")
       .then(data => {
         const normalised = data.map((w: any) => ({
           ...w,
@@ -66,7 +45,7 @@ export function BlockchainScreen() {
     <div style={{padding:"26px 28px"}}>
       <div style={{marginBottom:22}}>
         <h1 className="section-head">Blockchain Intelligence</h1>
-        <p className="page-sub">Wallet analytics and transaction pattern analysis — synthetic demo data only.</p>
+        <p className="page-sub">Wallet analytics and transaction pattern analysis.</p>
       </div>
 
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:13,marginBottom:20}}>
