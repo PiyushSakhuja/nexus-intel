@@ -21,7 +21,7 @@ const SIGNAL_LABELS: Record<string, string> = {
 };
 const SIGNAL_COLORS = ["#dc2626", "#ea580c", "#d97706", "#6366f1", "#8b5cf6", "#06b6d4", "#16a34a"];
 
-export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s:string,d?:any)=>void }) {
+export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity; navigate:(s:string,d?:any)=>void }) {
   const [tab, setTab] = useState("Overview");
   const tabs = ["Overview","Relationships","Activity","Evidence","Timeline"];
 
@@ -29,7 +29,7 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
   // displayId) or from a screen still on demo data (mock "ENT-xxx" id) —
   // either way we try the real endpoint and fall back to whatever was
   // passed in if it can't be found.
-  const displayId: string | undefined = (entity as any)?.displayId ?? entity?.id;
+  const displayId: string | undefined = (entityProp as any)?.displayId ?? entityProp?.id;
 
   const [live, setLive] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,7 +48,7 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
   // `source` is only used for cosmetic/demo fields (alias, firstSeen, mock
   // identifiers) when the live fetch hasn't resolved — it never backs the
   // risk/confidence numbers shown below.
-  const source: any = live ?? entity;
+  const source: any = live ?? entityProp;
   const computed = live?.computed ?? null;
   const correlation = live?.correlation ?? null;
 
@@ -60,6 +60,41 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
   const riskChange: number | null = live ? null : null; // computed.riskChange is always null — never calculable per-entity
 
   const dash = (v: number | string | null | undefined) => (v === null || v === undefined || v === "" ? "—" : v);
+
+  // Relationships tab: the entity detail endpoint doesn't include the graph
+  // node, so we find it ourselves (GraphNode.entityId === Entity.id), then
+  // ask the graph API to expand it into real edges. Fetched lazily, once,
+  // the first time the tab is opened.
+  const [graphNode, setGraphNode] = useState<any>(null);
+  const [relLoading, setRelLoading] = useState(false);
+  const [relError, setRelError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (tab !== "Relationships" || graphNode || relLoading) return;
+    setRelLoading(true);
+    fetch("http://localhost:4000/api/graph")
+      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+      .then(({ nodes }) => {
+        const match = (nodes || []).find((n: any) => n.entityId === source.id);
+        if (!match) throw new Error("No graph node linked to this entity yet");
+        return fetch(`http://localhost:4000/api/graph/${match.id}/expand`);
+      })
+      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+      .then(data => { setGraphNode(data); setRelError(null); })
+      .catch(err => setRelError(err.message))
+      .finally(() => setRelLoading(false));
+  }, [tab, source?.id]);
+
+  const typeColors: Record<string,string> = {ENTITY:"#6366f1",MARKET:"#8b5cf6",LISTING:"#d97706",WALLET:"#06b6d4",COMM:"#16a34a",TXN:"#ea580c"};
+
+  // Normalise edgesFrom/edgesTo (each direction has the "other" node nested
+  // differently) into one flat list: { other, label, direction }.
+  const relationships = graphNode
+    ? [
+        ...(graphNode.edgesFrom || []).map((e: any) => ({ other: e.to, label: e.label, direction: "→" })),
+        ...(graphNode.edgesTo || []).map((e: any) => ({ other: e.from, label: e.label, direction: "←" })),
+      ]
+    : [];
 
   return (
     <div style={{padding:"26px 28px"}}>
@@ -149,8 +184,8 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
               <div style={{fontSize:10.5,color:"var(--accent-hi)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Alias Correlation</div>
               <div style={{fontSize:10,color:"var(--text-4)",marginBottom:12}}>Conservative multi-signal correlation across listings — not full identity resolution.</div>
               <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {(source.identifiers ?? []).map((id:any)=>(
-                  <div key={id.type} style={{background:"rgba(255,255,255,0.03)",borderRadius:7,padding:"9px 12px"}}>
+                {(source.identifiers ?? []).map((id: { id?: string; type: string; value: string; confidence: number })=>(
+                  <div key={id.id ?? `${id.type}-${id.value}`} style={{background:"rgba(255,255,255,0.03)",borderRadius:7,padding:"9px 12px"}}>
                     <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
                       <span style={{fontSize:10,color:"var(--text-4)"}}>{id.type}</span>
                       <span style={{fontSize:10,color:"var(--low-light)",fontWeight:600}}>{id.confidence != null ? `${id.confidence}%` : "—"}</span>
@@ -246,7 +281,41 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
 
       {tab==="Timeline" && <TimelineView events={caseTimeline}/>}
 
-      {(tab==="Relationships"||tab==="Activity"||tab==="Evidence") && (
+      {tab==="Relationships" && (
+        <div className="card" style={{padding:20}}>
+          {relLoading && <p className="page-sub">Loading relationships…</p>}
+          {relError && (
+            <div style={{textAlign:"center",padding:"40px 0",color:"var(--text-4)"}}>
+              <div style={{fontSize:32,marginBottom:12,opacity:0.3}}>◫</div>
+              <div style={{marginBottom:10}}>{relError}</div>
+              <button onClick={()=>navigate("graph")} style={{background:"none",border:"none",color:"var(--accent-hi)",cursor:"pointer",fontSize:13,textDecoration:"underline"}}>View full Network Graph instead</button>
+            </div>
+          )}
+          {!relLoading && !relError && relationships.length===0 && graphNode && (
+            <p className="page-sub">No direct relationships recorded for this entity yet.</p>
+          )}
+          {!relLoading && relationships.length>0 && (
+            <>
+              <div style={{fontSize:11,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:12}}>
+                Direct Relationships ({relationships.length})
+              </div>
+              {relationships.map((r,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:11,padding:"10px 4px",borderBottom:"1px solid var(--border)"}}>
+                  <div style={{width:8,height:8,borderRadius:"50%",background:typeColors[r.other.type]||"#888",flexShrink:0,boxShadow:`0 0 5px ${typeColors[r.other.type]||"#888"}70`}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,color:"var(--text-1)",fontWeight:500}}>{r.direction} {r.other.label}</div>
+                    <div style={{fontSize:10,color:"var(--text-4)"}}>{r.label} · {r.other.type}</div>
+                  </div>
+                  <RiskBadge score={r.other.risk}/>
+                </div>
+              ))}
+              <button className="btn btn-ghost" style={{marginTop:16}} onClick={()=>navigate("graph")}>Open in Network Graph</button>
+            </>
+          )}
+        </div>
+      )}
+
+      {(tab==="Activity"||tab==="Evidence") && (
         <div style={{textAlign:"center",padding:"60px 0",color:"var(--text-4)"}}>
           <div style={{fontSize:32,marginBottom:12,opacity:0.3}}>◫</div>
           <div>Navigate to the dedicated <button onClick={()=>navigate(tab==="Evidence"?"evidence":"graph")} style={{background:"none",border:"none",color:"var(--accent-hi)",cursor:"pointer",fontSize:13,textDecoration:"underline"}}>{tab==="Evidence"?"Evidence Repository":"Network Graph"}</button> for this view.</div>
