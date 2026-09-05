@@ -30,18 +30,24 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
   const [alertsLoading, setAlertsLoading] = useState(true);
   const [alertsError, setAlertsError] = useState<string|null>(null);
 
-  useEffect(() => {
+  const loadAlerts = () => {
     fetch("http://localhost:4000/api/alerts")
       .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
       .then(data => {
-        // normalise DB rows to match the shape the UI expects
+        // normalise DB rows to match the shape the UI expects. Note:
+        // a.severity is the historical value at alert-creation time and is
+        // NEVER replaced with a linked entity's current computed risk —
+        // only the per-entity display (below) uses the live number.
         const normalised = data.map((a: any) => ({
           ...a,
-          severity: a.severity ?? a.risk ?? 50,
+          severity: a.severity ?? 50,
           status: (a.status ?? "NEW").toLowerCase(),
           time: a.createdAt ? new Date(a.createdAt).toLocaleString() : a.time ?? "",
           network: a.network?.displayId ?? a.network ?? null,
-          entities: (a.entities ?? []).map((ae: any) => ae.entity?.alias ?? ae.entity?.displayId ?? ae),
+          entities: (a.entities ?? []).map((ae: any) => ({
+            alias: ae.entity?.alias ?? ae.entity?.displayId ?? String(ae),
+            currentRisk: ae.entity?.risk ?? null,
+          })),
           title: a.title ?? a.type ?? "Alert",
           reason: a.reason ?? a.description ?? "",
         }));
@@ -50,6 +56,19 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
       })
       .catch(err => setAlertsError(err.message))
       .finally(() => setAlertsLoading(false));
+  };
+
+  useEffect(() => { loadAlerts(); }, []);
+
+  // Live pipeline events can create new alerts or change entity risk — never
+  // fabricate/duplicate an alert locally, just re-pull the authoritative list.
+  useEffect(() => {
+    const socket = getSocket();
+    const onEvent = (evt: any) => {
+      if (evt.type === "alert_generated" || evt.type === "risk_updated") loadAlerts();
+    };
+    socket.on("intelligence-event", onEvent);
+    return () => { socket.off("intelligence-event", onEvent); };
   }, []);
 
   const filtered = alertRows.filter(a=>{
@@ -112,9 +131,15 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
                 <div style={{fontSize:14,fontWeight:600,color:"var(--text-1)",marginBottom:6}}>{a.title}</div>
                 <div style={{fontSize:12,color:"var(--text-3)",lineHeight:1.5,marginBottom:10}}>{a.reason}</div>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                  {a.entities.map((e: string)=>(
-                    <span key={e} className="mono-sm" style={{background:"rgba(99,102,241,0.09)",border:"1px solid rgba(99,102,241,0.2)",borderRadius:4,padding:"2px 8px",color:"var(--accent-hi)"}}>{e}</span>
-                  ))}
+                  {a.entities.map((e: any, idx: number)=>{
+                    const alias = typeof e === "string" ? e : e.alias;
+                    const currentRisk = typeof e === "string" ? null : e.currentRisk;
+                    return (
+                      <span key={`${alias}-${idx}`} className="mono-sm" style={{background:"rgba(99,102,241,0.09)",border:"1px solid rgba(99,102,241,0.2)",borderRadius:4,padding:"2px 8px",color:"var(--accent-hi)"}}>
+                        {alias}{currentRisk != null && <span style={{color:"var(--text-4)"}}> · current risk {currentRisk}</span>}
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
 

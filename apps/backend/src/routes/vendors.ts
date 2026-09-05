@@ -14,6 +14,7 @@ async function loadListingInputs(): Promise<ListingInput[]> {
     priceUsd: l.priceUsd,
     marketplace: l.marketplace,
     vendorAlias: l.vendorAlias,
+    shipsFrom: l.shipsFrom,
     firstSeen: l.firstSeen,
     lastSeen: l.lastSeen,
   }));

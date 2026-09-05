@@ -36,6 +36,7 @@ export interface ListingInput {
   priceUsd: number | null;
   marketplace: string | null;
   vendorAlias: string | null;
+  shipsFrom: string | null;
   firstSeen: Date;
   lastSeen: Date;
 }
