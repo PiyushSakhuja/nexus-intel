@@ -1791,7 +1791,7 @@ function InvestigationsScreen({ navigate }: { navigate:(s:string,d?:any)=>void }
       {invError && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({invError}) — showing demo data.</p>}
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14}}>
         {invRows.map((inv,i)=>(
-          <div key={inv.id} className={`card card-hover anim-fade-up delay-${i+1}`} style={{padding:20}} onClick={()=>navigate("workspace")}>
+          <div key={inv.id} className={`card card-hover anim-fade-up delay-${i+1}`} style={{padding:20}} onClick={()=>navigate("workspace",inv.id)}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
               <span className="mono-sm" style={{color:"var(--accent-hi)"}}>{inv.id}</span>
               <span className={`badge ${inv.priority==="HIGH"?"badge-high":inv.priority==="MEDIUM"?"badge-medium":"badge-low"}`}>{inv.priority}</span>
@@ -1823,20 +1823,106 @@ function InvestigationsScreen({ navigate }: { navigate:(s:string,d?:any)=>void }
 
 // ─── WORKSPACE ────────────────────────────────────────────────────────────────
 
-function WorkspaceScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
-  const inv = investigations[0];
+function WorkspaceScreen({ navigate, displayId }: { navigate:(s:string,d?:any)=>void; displayId?: string|null }) {
   const [note, setNote] = useState("");
   const [accepted, setAccepted] = useState(false);
 
-  const recommendations = [
-    "Expand network analysis to include second-degree connections of Alias_Y",
-    "Request blockchain transaction records for Wallet_W1 and Wallet_W2",
-    "Cross-reference communication identifiers with Source Gamma dataset",
-    "Review temporal correlation between listing activity spikes and wallet transactions",
-  ];
+  // ─── Real investigation data ────────────────────────────────────────────
+  // Falls back to the demo array (and shows a banner) if the API can't be
+  // reached, or while we don't yet know which investigation to load.
+  const [inv, setInv] = useState<any>(investigations[0]);
+  const [invLoading, setInvLoading] = useState(true);
+  const [invError, setInvError] = useState<string|null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setInvLoading(true);
+    setInvError(null);
+
+    const load = async () => {
+      // No specific case was passed in (e.g. navigated here from a screen
+      // that doesn't carry an investigation) — fall back to the most
+      // recently updated real investigation so the workspace still shows
+      // live data instead of only ever the mock case.
+      let targetId = displayId;
+      if (!targetId) {
+        const listRes = await fetch("http://localhost:4000/api/investigations");
+        if (!listRes.ok) throw new Error(`API ${listRes.status}`);
+        const list = await listRes.json();
+        targetId = list[0]?.displayId;
+        if (!targetId) throw new Error("No investigations found");
+      }
+
+      const res = await fetch(`http://localhost:4000/api/investigations/${targetId}`);
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const data = await res.json();
+      if (cancelled) return;
+
+      setInv({
+        ...data,
+        id: data.displayId,
+        entities: data.entities?.length ?? data._count?.entities ?? 0,
+        evidence: data.evidence?.length ?? data._count?.evidence ?? 0,
+        status: (data.status ?? "UNDER_INVESTIGATION").replace(/_/g, " "),
+        priority: data.priority ?? "MEDIUM",
+        assignee: data.assignee ?? "Unassigned",
+        updated: data.updatedAt ? new Date(data.updatedAt).toLocaleString() : data.updated ?? "",
+        description: data.description ?? "",
+        relatedEntities: (data.entities ?? []).map((ie: any) => ie.entity),
+        // AiAssessment rows come back newest-first (see GET /:displayId).
+        latestAssessment: data.aiAssessments?.[0] ?? null,
+      });
+    };
+
+    load()
+      .catch((err) => { if (!cancelled) setInvError(err.message); })
+      .finally(() => { if (!cancelled) setInvLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [displayId]);
+
+  // ─── AI Assessment ───────────────────────────────────────────────────────
+  // Signals -> Gemini -> explanation -> stored -> displayed. The button
+  // below triggers the whole pipeline server-side; we just render whatever
+  // comes back (or whatever's already stored on the investigation).
+  const [assessment, setAssessment] = useState<any>(null);
+  const [assessLoading, setAssessLoading] = useState(false);
+  const [assessError, setAssessError] = useState<string|null>(null);
+
+  useEffect(() => {
+    setAssessment(inv?.latestAssessment ?? null);
+  }, [inv?.latestAssessment]);
+
+  const runAiAssessment = async () => {
+    if (!inv?.id) return;
+    setAssessLoading(true);
+    setAssessError(null);
+    try {
+      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/ai-assessment`, { method: "POST" });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const data = await res.json();
+      setAssessment(data);
+      setAccepted(false);
+    } catch (err: any) {
+      setAssessError(err.message);
+    } finally {
+      setAssessLoading(false);
+    }
+  };
+
+  const recommendations: string[] = assessment?.recommendedNext
+    ? (() => { try { return JSON.parse(assessment.recommendedNext); } catch { return [assessment.recommendedNext]; } })()
+    : [
+        "Expand network analysis to include second-degree connections of Alias_Y",
+        "Request blockchain transaction records for Wallet_W1 and Wallet_W2",
+        "Cross-reference communication identifiers with Source Gamma dataset",
+        "Review temporal correlation between listing activity spikes and wallet transactions",
+      ];
 
   return (
     <div style={{padding:"26px 28px"}}>
+      {invLoading && <p className="page-sub" style={{marginBottom:12}}>Loading case…</p>}
+      {invError && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({invError}) — showing demo data.</p>}
       {/* Header */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:22}}>
         <div>
@@ -1847,8 +1933,8 @@ function WorkspaceScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
           </div>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
             <h1 className="section-head display" style={{fontSize:20}}>{inv.title}</h1>
-            <span className="badge badge-pending">UNDER INVESTIGATION</span>
-            <span className="badge badge-high">HIGH</span>
+            <span className="badge badge-pending">{inv.status}</span>
+            <span className={`badge ${inv.priority==="HIGH"?"badge-high":inv.priority==="MEDIUM"?"badge-medium":"badge-low"}`}>{inv.priority}</span>
           </div>
           <div style={{fontSize:12,color:"var(--text-3)"}}>Assigned to <span style={{color:"var(--text-2)"}}>{inv.assignee}</span> · Updated {inv.updated}</div>
         </div>
@@ -1876,14 +1962,14 @@ function WorkspaceScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
               <button className="btn btn-ghost btn-sm" onClick={()=>navigate("entities")}>View All</button>
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
-              {entities.slice(0,4).map(e=>(
-                <div key={e.id} style={{display:"flex",alignItems:"center",gap:11,padding:"10px 12px",background:"rgba(255,255,255,0.03)",borderRadius:8,cursor:"pointer",transition:"background 0.13s"}}
+              {(inv.relatedEntities?.length ? inv.relatedEntities : entities).slice(0,4).map((e:any)=>(
+                <div key={e.displayId ?? e.id} style={{display:"flex",alignItems:"center",gap:11,padding:"10px 12px",background:"rgba(255,255,255,0.03)",borderRadius:8,cursor:"pointer",transition:"background 0.13s"}}
                   onMouseEnter={el=>{(el.currentTarget as HTMLElement).style.background="rgba(255,255,255,0.05)";}}
                   onMouseLeave={el=>{(el.currentTarget as HTMLElement).style.background="rgba(255,255,255,0.03)";}}>
                   <div style={{width:28,height:28,borderRadius:"50%",background:"rgba(99,102,241,0.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--accent-hi)",flexShrink:0}}>◈</div>
                   <div style={{flex:1}}>
                     <div style={{fontSize:12.5,fontWeight:500,color:"var(--text-1)"}}>{e.alias}</div>
-                    <div className="mono-sm" style={{color:"var(--text-4)"}}>{e.id}</div>
+                    <div className="mono-sm" style={{color:"var(--text-4)"}}>{e.displayId ?? e.id}</div>
                   </div>
                   <RiskBadge score={e.risk}/>
                   <button className="btn btn-ghost btn-sm" onClick={()=>navigate("entity",e)}>View</button>
@@ -1922,13 +2008,40 @@ function WorkspaceScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           {/* AI assessment */}
           <div className="card card-glow-accent" style={{padding:20}}>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
-              <PulseIndicator color="var(--accent)"/>
-              <div style={{fontSize:13,fontWeight:700,color:"var(--text-1)"}}>AI Assessment</div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <PulseIndicator color="var(--accent)"/>
+                <div style={{fontSize:13,fontWeight:700,color:"var(--text-1)"}}>AI Assessment</div>
+                {assessment && <RiskBadge score={assessment.riskScore}/>}
+              </div>
+              <button className="btn btn-ghost btn-sm" disabled={assessLoading} onClick={runAiAssessment}>
+                {assessLoading ? "Running…" : assessment ? "Re-run" : "Run AI Assessment"}
+              </button>
             </div>
-            <div style={{fontSize:12,color:"var(--text-2)",lineHeight:1.65,marginBottom:12}}>
-              This network presents a high-confidence pattern consistent with coordinated cross-source activity. Entity resolution confidence 93%. Rapid risk escalation (+59 pts) over 20 days suggests active and possibly expanding operation.
-            </div>
+
+            {assessError && (
+              <div style={{fontSize:11.5,color:"var(--high-light)",marginBottom:12}}>Couldn't reach the API ({assessError}).</div>
+            )}
+
+            {!assessment && !assessLoading && !assessError && (
+              <div style={{fontSize:12,color:"var(--text-3)",lineHeight:1.65,marginBottom:12}}>
+                No assessment yet for this case. Click "Run AI Assessment" to generate one from the case's live signals.
+              </div>
+            )}
+
+            {assessment && (
+              <>
+                <div style={{fontSize:12,color:"var(--text-2)",lineHeight:1.65,marginBottom:12}}>
+                  {assessment.explanation}
+                </div>
+                {assessment.aiGenerated===false && (
+                  <div style={{fontSize:10.5,color:"var(--text-4)",marginBottom:12}}>
+                    Gemini was unreachable when this ran — showing a deterministic fallback summary instead of a generated narrative.
+                  </div>
+                )}
+              </>
+            )}
+
             <div className="ai-strip" style={{marginBottom:14}}>
               <span style={{color:"var(--medium-light)",fontSize:14,flexShrink:0}}>⚠</span>
               <div style={{fontSize:10.5,color:"var(--medium-light)"}}>AI-generated — all conclusions require investigator review. This assessment does not constitute a criminal determination.</div>
@@ -2594,9 +2707,19 @@ export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [screen, setScreen] = useState("overview");
   const [entityData, setEntityData] = useState(entities[0]);
+  // The investigation displayId ("INV-2026-042") that WorkspaceScreen should
+  // load from the real API. Set whenever navigate("workspace", data) is
+  // called with either a plain displayId string or an investigation-like
+  // object carrying one. Falls back to null (WorkspaceScreen loads the
+  // most recent investigation) when navigated to without one.
+  const [workspaceDisplayId, setWorkspaceDisplayId] = useState<string | null>(null);
 
   const navigate = useCallback((s: string, data?: any) => {
     if (s === "entity" && data) setEntityData(data);
+    if (s === "workspace" && data) {
+      const displayId = typeof data === "string" ? data : data.displayId ?? data.id;
+      if (displayId) setWorkspaceDisplayId(displayId);
+    }
     setScreen(s);
     // Scroll main to top
     setTimeout(() => {
@@ -2618,7 +2741,7 @@ export default function App() {
       case "listings":      return <ListingsScreen/>;
       case "blockchain":    return <BlockchainScreen/>;
       case "investigations":return <InvestigationsScreen navigate={navigate}/>;
-      case "workspace":     return <WorkspaceScreen navigate={navigate}/>;
+      case "workspace":     return <WorkspaceScreen navigate={navigate} displayId={workspaceDisplayId}/>;
       case "timeline":      return <TimelineScreen navigate={navigate}/>;
       case "evidence":      return <EvidenceScreen/>;
       case "analytics":     return <AnalyticsScreen/>;
