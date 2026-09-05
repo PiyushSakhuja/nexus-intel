@@ -23,9 +23,33 @@ import { getSocket, EVENT_META } from "../lib/socket";
 // unchanged; only screens explicitly wired to the API override this.
 const entities = mockEntities;
 
-export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s:string,d?:any)=>void }) {
+export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity; navigate:(s:string,d?:any)=>void }) {
   const [tab, setTab] = useState("Overview");
   const tabs = ["Overview","Relationships","Activity","Evidence","Timeline"];
+
+  // Start with whatever was passed in from the list row (list rows already
+  // come from the API in EntitiesScreen, so this is never blank) so the
+  // page never flashes empty. Once the fuller detail record lands — with
+  // network.riskPoints, alertLinks, investigationLinks, events, and the
+  // real `computed` risk explanation — swap it in.
+  const [entity, setEntity] = useState<any>(entityProp);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const displayId = (entityProp as any)?.displayId ?? entityProp?.id;
+    if (!displayId) { setLoading(false); return; }
+
+    setLoading(true);
+    fetch(`http://localhost:4000/api/entities/${displayId}`)
+      .then(res => {
+        if (!res.ok) throw new Error(`API returned ${res.status}`);
+        return res.json();
+      })
+      .then(data => { setEntity(data); setError(null); })
+      .catch(err => setError(err.message)) // keep showing entityProp on failure
+      .finally(() => setLoading(false));
+  }, [(entityProp as any)?.displayId, entityProp?.id]);
 
   return (
     <div style={{padding:"26px 28px"}}>
@@ -56,6 +80,9 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
           </div>
         </div>
       </div>
+
+      {loading && <p className="page-sub" style={{marginBottom:12}}>Loading full profile…</p>}
+      {error && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({error}) — showing the summary already in hand.</p>}
 
       {/* Tabs */}
       <div className="tab-strip" style={{marginBottom:22}}>
@@ -129,7 +156,8 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
               <div className="divider" style={{margin:"16px 0"}}/>
               <div style={{background:"rgba(255,255,255,0.03)",borderRadius:9,padding:"14px 16px",borderLeft:"3px solid var(--accent)",marginBottom:14}}>
                 <div style={{fontSize:12.5,color:"var(--text-2)",lineHeight:1.65}}>
-                  "Risk increased due to repeated identifiers across multiple intelligence sources, association with high-risk network entities, and an abnormal activity pattern consistent with coordinated behaviour over a 4-day window."
+                  {entity.computed?.explanation ??
+                    "Risk increased due to repeated identifiers across multiple intelligence sources, association with high-risk network entities, and an abnormal activity pattern consistent with coordinated behaviour over a 4-day window."}
                 </div>
               </div>
               <div className="ai-strip">
@@ -153,10 +181,10 @@ export function EntityScreen({ entity, navigate }: { entity: Entity; navigate:(s
               <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:14}}>Activity Summary</div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
                 {[
-                  {label:"Marketplaces",val:entity.marketplaces,icon:"▤"},
-                  {label:"Wallets",val:entity.wallets,icon:"◇"},
-                  {label:"Listings",val:entity.listings,icon:"▣"},
-                  {label:"Comm IDs",val:entity.comms,icon:"◉"},
+                  {label:"Marketplaces",val:entity.marketplaces ?? "—",icon:"▤"},
+                  {label:"Wallets",val:entity.wallets ?? "—",icon:"◇"},
+                  {label:"Listings",val:entity.listings ?? "—",icon:"▣"},
+                  {label:"Comm IDs",val:entity.comms ?? "—",icon:"◉"},
                 ].map(item=>(
                   <div key={item.label} style={{textAlign:"center",background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"12px 8px"}}>
                     <div style={{fontSize:18,color:"var(--text-4)",marginBottom:4}}>{item.icon}</div>
