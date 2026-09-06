@@ -314,13 +314,14 @@ investigationsRouter.post(
       });
     }
 
-    const count = await prisma.evidenceRecord.count({
-      where: {
-        investigationId: inv.id,
-      },
-    });
-
-    const displayId = `EV-${String(count + 1).padStart(4, "0")}`;
+    // `displayId` is globally unique (see schema.prisma), so it must be
+    // derived from a global evidence count — not one scoped to this
+    // investigation. Two different investigations both starting their
+    // count at 0 would otherwise both try to create "EV-0001" and the
+    // second one would fail with a unique-constraint error (P2002).
+    // Retried a few times (mirroring the count-based generation
+    // routes/misc.ts's POST /api/evidence already uses) so two
+    // near-simultaneous requests recover instead of 500-ing.
     const trimmedNotes = notes?.trim() || null;
 
     // Real SHA-256 over whatever the investigator actually gave us (type +
@@ -335,17 +336,34 @@ investigationsRouter.post(
       .digest("hex")
       .toUpperCase();
 
-    const evidence = await prisma.evidenceRecord.create({
-      data: {
-        displayId,
-        investigationId: inv.id,
-        type: type.trim(),
-        notes: trimmedNotes,
-        uploadedBy: "Investigator A",
-        status: "PENDING",
-        hash,
-      },
-    });
+    const createEvidenceWithRetry = async (
+      attemptsLeft: number
+    ): Promise<Awaited<ReturnType<typeof prisma.evidenceRecord.create>>> => {
+      const count = await prisma.evidenceRecord.count();
+      const displayId = `EV-${String(count + 1).padStart(4, "0")}`;
+
+      try {
+        return await prisma.evidenceRecord.create({
+          data: {
+            displayId,
+            investigationId: inv.id,
+            type: type.trim(),
+            notes: trimmedNotes,
+            uploadedBy: "Investigator A",
+            status: "PENDING",
+            hash,
+          },
+        });
+      } catch (e: any) {
+        if (e.code === "P2002" && attemptsLeft > 1) {
+          // another request grabbed this displayId first — recount and retry
+          return createEvidenceWithRetry(attemptsLeft - 1);
+        }
+        throw e;
+      }
+    };
+
+    const evidence = await createEvidenceWithRetry(5);
 
     await logAudit({
       user: "Investigator A",
