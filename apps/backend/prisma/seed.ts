@@ -1,5 +1,6 @@
 import { PrismaClient, SourceAccess } from '@prisma/client'
 import { scoreListings, signalsToDisplayStrings } from '../src/lib/riskEngine.js'
+import { syncGraphFromEntities } from '../src/lib/graphSync.js'
 
 const prisma = new PrismaClient()
 
@@ -3336,75 +3337,13 @@ async function main() {
   console.log('Networks created: 5')
 
   // ─── Network graph (GraphNode / GraphEdge) ───────────────────────────────────
-  // Previously unseeded, so GET /api/graph returned { nodes: [], edges: [] }.
-  // Because the frontend only overwrites its mock nodes/edges when the
-  // response is non-empty, the Network Graph screen silently kept showing
-  // the hardcoded demo layout with no error and no indication anything
-  // was wrong — seeding this table is the actual fix.
+  // Generated via the same shared function the live API uses on every
+  // GET /api/graph request (see src/lib/graphSync.ts) — so seed-time and
+  // runtime graph generation never drift apart, and the graph doesn't need
+  // to be manually reseeded as new entities are added later.
 
-  await prisma.graphNode.upsert({
-    where: { id: "gph_alias_x" }, update: {},
-    create: { id: "gph_alias_x", label: "Alias_X", type: "ENTITY", risk: 84, x: 420, y: 240, entityId: "ent_1xrdh2up5txj6u7usgd8psmf" },
-  })
-  await prisma.graphNode.upsert({
-    where: { id: "gph_alias_y" }, update: {},
-    create: { id: "gph_alias_y", label: "Alias_Y", type: "ENTITY", risk: 71, x: 680, y: 180, entityId: "ent_lvwg0jr1ws23e7ytwpsgoupu" },
-  })
-  await prisma.graphNode.upsert({
-    where: { id: "gph_market_a" }, update: {},
-    create: { id: "gph_market_a", label: "Marketplace_A", type: "MARKET", risk: 72, x: 240, y: 340 },
-  })
-  await prisma.graphNode.upsert({
-    where: { id: "gph_market_b" }, update: {},
-    create: { id: "gph_market_b", label: "Marketplace_B", type: "MARKET", risk: 49, x: 330, y: 150 },
-  })
-  await prisma.graphNode.upsert({
-    where: { id: "gph_listing_17" }, update: {},
-    create: { id: "gph_listing_17", label: "Listing_017", type: "LISTING", risk: 58, x: 148, y: 460 },
-  })
-  await prisma.graphNode.upsert({
-    where: { id: "gph_wallet_w1" }, update: {},
-    create: { id: "gph_wallet_w1", label: "Wallet_W1", type: "WALLET", risk: 87, x: 560, y: 350 },
-  })
-  await prisma.graphNode.upsert({
-    where: { id: "gph_wallet_w2" }, update: {},
-    create: { id: "gph_wallet_w2", label: "Wallet_W2", type: "WALLET", risk: 74, x: 620, y: 480 },
-  })
-  await prisma.graphNode.upsert({
-    where: { id: "gph_comm_04" }, update: {},
-    create: { id: "gph_comm_04", label: "Comm_ID_04", type: "COMM", risk: 62, x: 520, y: 130 },
-  })
-  await prisma.graphNode.upsert({
-    where: { id: "gph_txn_001" }, update: {},
-    create: { id: "gph_txn_001", label: "Txn_3f8a", type: "TXN", risk: 55, x: 690, y: 380 },
-  })
-  await prisma.graphNode.upsert({
-    where: { id: "gph_alias_z" }, update: {},
-    create: { id: "gph_alias_z", label: "Alias_Z", type: "ENTITY", risk: 52, x: 780, y: 290, entityId: "ent_8gc0m2lwr3qoaocu2h09dmeh" },
-  })
-
-  const graphEdgeSeeds: [string, string, string][] = [
-    ["gph_alias_x", "gph_market_a", "Appeared On"],
-    ["gph_alias_x", "gph_market_b", "Appeared On"],
-    ["gph_alias_x", "gph_wallet_w1", "Transacted With"],
-    ["gph_alias_x", "gph_comm_04", "Linked To"],
-    ["gph_market_a", "gph_listing_17", "Contains"],
-    ["gph_wallet_w1", "gph_wallet_w2", "Transacted With"],
-    ["gph_wallet_w1", "gph_alias_y", "Associated With"],
-    ["gph_wallet_w2", "gph_txn_001", "Transacted With"],
-    ["gph_alias_y", "gph_market_a", "Appeared On"],
-    ["gph_alias_y", "gph_alias_z", "Shared Identifier"],
-    ["gph_txn_001", "gph_alias_z", "Associated With"],
-  ]
-  for (const [fromId, toId, label] of graphEdgeSeeds) {
-    const id = `gph_edge_${fromId}_${toId}`
-    await prisma.graphEdge.upsert({
-      where: { id }, update: {},
-      create: { id, fromId, toId, label },
-    })
-  }
-
-  console.log('Graph nodes/edges created: 10 / 11')
+  const { nodeCount, edgeCount } = await syncGraphFromEntities(prisma)
+  console.log(`Graph nodes/edges created: ${nodeCount} / ${edgeCount}`)
 
   // ─── Investigations ───────────────────────────────────────────────────────
 

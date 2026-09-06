@@ -8,7 +8,7 @@ import {
   riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
   activityTimeline, riskDistribution, networkRiskEvolution,
   alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
+  kpis, alerts, emergingNetworks, listings, wallets,
   investigations, evidenceRecords, graphNodes, graphEdges,
   auditLog, flagContributions, networkSignals, caseTimeline,
   type Entity, type Alert, type Investigation, type EvidenceRecord,
@@ -19,13 +19,10 @@ import {
 } from "../components/shared";
 import { getSocket, EVENT_META } from "../lib/socket";
 
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
-
 export function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
-  const [selected, setSelected] = useState<string|null>("wallet-w1");
+  const [selected, setSelected] = useState<string|null>(null);
   const [riskOverlay, setRiskOverlay] = useState(true);
+  const [focusMode, setFocusMode] = useState(true);
   const [mode, setMode] = useState<"entity"|"network">("entity");
   const [liveNodes, setLiveNodes] = useState<any[]>(graphNodes);
   const [liveEdges, setLiveEdges] = useState<any[]>(graphEdges);
@@ -59,6 +56,17 @@ export function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) 
   const connectedEdges = liveEdges.filter(e=>e.from===selected||e.to===selected);
   const connectedIds = new Set(connectedEdges.flatMap(e=>[e.from,e.to]));
 
+  // Focus mode: when a node is selected, render only that node and its
+  // direct neighborhood instead of the full graph. With dense real data
+  // (many entities sharing correlation signals), rendering everything at
+  // once produces an unreadable tangle — focus mode is the fix, not a
+  // cosmetic option, so it defaults to on.
+  const isFocused = focusMode && !!selected;
+  const renderedNodes = isFocused
+    ? liveNodes.filter(n => n.id === selected || connectedIds.has(n.id))
+    : liveNodes;
+  const renderedEdges = isFocused ? connectedEdges : liveEdges;
+
   const getPos = (id: string) => liveNodes.find(n=>n.id===id)||{x:0,y:0};
 
   return (
@@ -77,6 +85,12 @@ export function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) 
           <div className="glass" style={{borderRadius:9,padding:"5px 12px",display:"flex",alignItems:"center",gap:10}}>
             <span style={{fontSize:11,color:"var(--text-3)"}}>Risk Overlay</span>
             <div className={`toggle-track ${riskOverlay?"on":"off"}`} onClick={()=>setRiskOverlay(!riskOverlay)} style={{cursor:"pointer"}}>
+              <div className="toggle-thumb"/>
+            </div>
+          </div>
+          <div className="glass" style={{borderRadius:9,padding:"5px 12px",display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:11,color:"var(--text-3)"}} title="When on, selecting a node shows only that node and its direct connections instead of the entire graph">Focus Mode</span>
+            <div className={`toggle-track ${focusMode?"on":"off"}`} onClick={()=>setFocusMode(!focusMode)} style={{cursor:"pointer"}}>
               <div className="toggle-thumb"/>
             </div>
           </div>
@@ -128,7 +142,7 @@ export function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) 
           <rect width="900" height="620" fill="url(#g-bg)"/>
 
           {/* Edges */}
-          {liveEdges.map((edge,i)=>{
+          {renderedEdges.map((edge,i)=>{
             const f = getPos(edge.from); const t = getPos(edge.to);
             const isHighlighted = selected && (edge.from===selected||edge.to===selected);
             const mx=(f.x+t.x)/2; const my=(f.y+t.y)/2;
@@ -140,16 +154,21 @@ export function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) 
                   strokeDasharray={isHighlighted?"none":"5 4"}
                   style={isHighlighted?{}:{animation:`dash-flow ${7+i*0.5}s linear infinite`}}
                 />
-                <text x={mx} y={my-5} textAnchor="middle" fill="rgba(255,255,255,0.18)" fontSize="7.5" fontFamily="Inter,sans-serif">{edge.label}</text>
+                {/* Only draw the label when the edge is actually relevant —
+                    with dense real correlation data, labeling every edge
+                    at once buries the graph in overlapping text. */}
+                {(isHighlighted || isFocused) && (
+                  <text x={mx} y={my-5} textAnchor="middle" fill="rgba(255,255,255,0.45)" fontSize="7.5" fontFamily="Inter,sans-serif">{edge.label}</text>
+                )}
               </g>
             );
           })}
 
           {/* Nodes */}
-          {liveNodes.map((n,i)=>{
+          {renderedNodes.map((n,i)=>{
             const color = typeColors[n.type];
             const isSel = n.id===selected;
-            const isDimmed = selected && !connectedIds.has(n.id) && n.id!==selected;
+            const isDimmed = !isFocused && selected && !connectedIds.has(n.id) && n.id!==selected;
             const r = riskOverlay ? 10+(n.risk/100)*12 : 13;
             return (
               <g key={n.id} style={{cursor:"pointer"}} onClick={()=>setSelected(n.id===selected?null:n.id)}>
@@ -250,7 +269,15 @@ export function GraphScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) 
           </div>
 
           <div style={{display:"flex",flexDirection:"column",gap:7}}>
-            <button className="btn btn-primary" style={{justifyContent:"center"}} onClick={()=>navigate("entity",entities[0])}>View Full Profile</button>
+            <button
+              className="btn btn-primary"
+              style={{justifyContent:"center", opacity: selNode.type==="entity" ? 1 : 0.5, cursor: selNode.type==="entity" ? "pointer" : "not-allowed"}}
+              disabled={selNode.type!=="entity"}
+              title={selNode.type==="entity" ? undefined : "Full profile is only available for entity nodes"}
+              onClick={()=>{ if (selNode.type==="entity") navigate("entity", selNode); }}
+            >
+              View Full Profile
+            </button>
             <button className="btn btn-ghost" style={{justifyContent:"center"}} onClick={()=>navigate("network-risk")}>Network Risk Analysis</button>
             <button className="btn btn-ghost" style={{justifyContent:"center"}} onClick={()=>navigate("workspace")}>Add to Investigation</button>
           </div>
