@@ -49,7 +49,7 @@ async function main() {
       lastSeen:  new Date("2025-12-04T16:31:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Valhalla:Hackyboy", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "Netherlands", confidence: 70 },
         ],
       },
@@ -70,7 +70,7 @@ async function main() {
       lastSeen:  new Date("2025-08-24T20:04:42+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:goldendrugs", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
           { type: "ships_from", value: "Netherlands", confidence: 70 },
         ],
       },
@@ -91,8 +91,8 @@ async function main() {
       lastSeen:  new Date("2025-11-19T22:06:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:HappyEyes", confidence: 90 },
-          { type: "marketplace_alias", value: "Valhalla:HappyEyes", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "United States", confidence: 70 },
         ],
       },
@@ -113,8 +113,8 @@ async function main() {
       lastSeen:  new Date("2025-11-16T17:43:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:OnePiece", confidence: 90 },
-          { type: "marketplace_alias", value: "Valhalla:OnePiece", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "Worldwide, Philippines", confidence: 70 },
         ],
       },
@@ -135,8 +135,8 @@ async function main() {
       lastSeen:  new Date("2025-11-30T10:13:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:RepAAA", confidence: 90 },
-          { type: "marketplace_alias", value: "Valhalla:RepAAA", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "Hong Kong, China", confidence: 70 },
         ],
       },
@@ -157,7 +157,7 @@ async function main() {
       lastSeen:  new Date("2025-08-15T20:22:58+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:DUTCHBULK", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
           { type: "ships_from", value: "Germany, Worldwide", confidence: 70 },
         ],
       },
@@ -178,7 +178,7 @@ async function main() {
       lastSeen:  new Date("2025-08-06T18:33:49+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:Doug-Heffernan", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
           { type: "ships_from", value: "Worldwide, Europe (EU)", confidence: 70 },
         ],
       },
@@ -199,7 +199,7 @@ async function main() {
       lastSeen:  new Date("2025-11-24T07:43:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Valhalla:montana193", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "Lithuania", confidence: 70 },
         ],
       },
@@ -220,8 +220,8 @@ async function main() {
       lastSeen:  new Date("2025-11-12T13:20:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:cerberus", confidence: 90 },
-          { type: "marketplace_alias", value: "Valhalla:cerberus", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "Worldwide, United Kingdom", confidence: 70 },
         ],
       },
@@ -242,8 +242,8 @@ async function main() {
       lastSeen:  new Date("2025-11-22T02:00:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:Junkiepig666", confidence: 90 },
-          { type: "marketplace_alias", value: "Valhalla:Junkiepig666", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "Germany, Worldwide", confidence: 70 },
         ],
       },
@@ -264,8 +264,8 @@ async function main() {
       lastSeen:  new Date("2025-11-20T17:56:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:color", confidence: 90 },
-          { type: "marketplace_alias", value: "Valhalla:color", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "Worldwide, United States", confidence: 70 },
         ],
       },
@@ -286,7 +286,7 @@ async function main() {
       lastSeen:  new Date("2025-08-22T18:50:41+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:VideoK", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
           { type: "ships_from", value: "Worldwide", confidence: 70 },
         ],
       },
@@ -307,8 +307,8 @@ async function main() {
       lastSeen:  new Date("2025-11-21T22:24:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:pckabml", confidence: 90 },
-          { type: "marketplace_alias", value: "Valhalla:pckabml", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "Worldwide, United Kingdom", confidence: 70 },
         ],
       },
@@ -329,7 +329,7 @@ async function main() {
       lastSeen:  new Date("2025-12-03T11:37:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Valhalla:bank", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "United States", confidence: 70 },
         ],
       },
@@ -350,7 +350,7 @@ async function main() {
       lastSeen:  new Date("2025-11-16T09:25:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Valhalla:darkmarket03", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "United States", confidence: 70 },
         ],
       },
@@ -371,7 +371,7 @@ async function main() {
       lastSeen:  new Date("2025-11-12T04:16:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Valhalla:Meds2Buy", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "Philippines", confidence: 70 },
         ],
       },
@@ -392,7 +392,7 @@ async function main() {
       lastSeen:  new Date("2025-12-07T14:39:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Valhalla:XTC-Love", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "Germany, Netherlands", confidence: 70 },
         ],
       },
@@ -413,7 +413,7 @@ async function main() {
       lastSeen:  new Date("2025-08-14T19:50:43+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:ALaurizen", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
           { type: "ships_from", value: "Worldwide, China", confidence: 70 },
         ],
       },
@@ -434,7 +434,7 @@ async function main() {
       lastSeen:  new Date("2025-11-20T16:25:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Valhalla:cyberzen", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "Finland", confidence: 70 },
         ],
       },
@@ -455,7 +455,7 @@ async function main() {
       lastSeen:  new Date("2025-08-19T19:49:58+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:ROCKETCHEM", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
           { type: "ships_from", value: "China", confidence: 70 },
         ],
       },
@@ -476,8 +476,8 @@ async function main() {
       lastSeen:  new Date("2025-11-05T13:21:00+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:smart666tiger", confidence: 90 },
-          { type: "marketplace_alias", value: "Valhalla:smart666tiger", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
+          { type: "marketplace_alias", value: "Valhalla", confidence: 90 },
           { type: "ships_from", value: "Worldwide, Iceland", confidence: 70 },
         ],
       },
@@ -498,7 +498,7 @@ async function main() {
       lastSeen:  new Date("2025-08-09T15:57:44+00:00"),
       identifiers: {
         create: [
-          { type: "marketplace_alias", value: "Hansa:dutchcandyshop", confidence: 90 },
+          { type: "marketplace_alias", value: "Hansa", confidence: 90 },
           { type: "ships_from", value: "Europe (EU), Belgium", confidence: 70 },
         ],
       },
@@ -3336,63 +3336,76 @@ async function main() {
 
   console.log('Networks created: 5')
 
-  // ─── Wallet transactions ─────────────────────────────────────────────────────
-  // The FK Wallet never had: before this, "why is WALLET-W1 relevant to
-  // investigation X" had no real answer anywhere in the schema (Wallet had
-  // no entityId/networkId at all). Each row here is a real, specific
-  // observed movement between a wallet and an entity, on the network that
-  // entity belonged to at the time — this is what
-  // lib/investigationDetail.ts walks to answer "why is this wallet
-  // relevant" instead of hardcoding the answer in the frontend.
-  //
-  // Deliberately NOT limited to INV-2026-042's entities: WALLET-W1/W2 are
-  // Cluster-C1 (see Wallet seed above), and INV-2026-031 ("Wallet Cluster
-  // Analysis") already describes "Blockchain cluster Cluster-C1 analysis
-  // following abnormal outflow detection" against entity DUTCHBULK (N-067)
-  // — so those wallets also transacting with DUTCHBULK fills in a
-  // connection that narrative already implied, rather than inventing one.
-  // WALLET-W3/W4 transact with entities on N-031, entirely unrelated to
-  // INV-2026-042, as a control: if the WalletTransaction rows for W1/W2
-  // were removed, those wallets should stop appearing under INV-2026-042
-  // entirely rather than falling back to a hardcoded relevance string.
+  // ─── Network graph (GraphNode / GraphEdge) ───────────────────────────────────
+  // Previously unseeded, so GET /api/graph returned { nodes: [], edges: [] }.
+  // Because the frontend only overwrites its mock nodes/edges when the
+  // response is non-empty, the Network Graph screen silently kept showing
+  // the hardcoded demo layout with no error and no indication anything
+  // was wrong — seeding this table is the actual fix.
 
-  const walletTxnSeeds = [
-    // WALLET-W1 (Cluster-C1) <-> INV-2026-042 entities on N-042
-    { id: "wtx_001a1b2c3d4e5f6g7h8i9j0", walletId: "wal_w1a9k4n7t2vqmxz6ryc0h5bd", entityId: "ent_1xrdh2up5txj6u7usgd8psmf", networkId: netN042.id, direction: "OUTBOUND", amountBtcEq: 1.2, occurredAt: new Date("2026-08-13T09:14:00+00:00") }, // -> Hackyboy
-    { id: "wtx_002b2c3d4e5f6g7h8i9j0k1", walletId: "wal_w1a9k4n7t2vqmxz6ryc0h5bd", entityId: "ent_1xrdh2up5txj6u7usgd8psmf", networkId: netN042.id, direction: "INBOUND",  amountBtcEq: 0.8, occurredAt: new Date("2026-08-14T11:02:00+00:00") }, // <- Hackyboy
-    { id: "wtx_003c3d4e5f6g7h8i9j0k1l2", walletId: "wal_w1a9k4n7t2vqmxz6ryc0h5bd", entityId: "ent_8tobfmrwoq0xap29a8cm4yt8", networkId: netN042.id, direction: "OUTBOUND", amountBtcEq: 0.65, occurredAt: new Date("2026-08-15T08:41:00+00:00") }, // -> goldendrugs
-    // WALLET-W2 (Cluster-C1) <-> INV-2026-042 entity HappyEyes on N-042
-    { id: "wtx_004d4e5f6g7h8i9j0k1l2m3", walletId: "wal_w2c7m3x9q1vryhz5tbk0n8f4", entityId: "ent_lvwg0jr1ws23e7ytwpsgoupu", networkId: netN042.id, direction: "OUTBOUND", amountBtcEq: 0.9, occurredAt: new Date("2026-08-12T14:27:00+00:00") }, // -> HappyEyes
-    { id: "wtx_005e5f6g7h8i9j0k1l2m3n4", walletId: "wal_w2c7m3x9q1vryhz5tbk0n8f4", entityId: "ent_lvwg0jr1ws23e7ytwpsgoupu", networkId: netN042.id, direction: "INBOUND",  amountBtcEq: 0.4, occurredAt: new Date("2026-08-15T19:53:00+00:00") }, // <- HappyEyes
-    // WALLET-W1/W2 (Cluster-C1) <-> DUTCHBULK on N-067 — the "abnormal
-    // outflow" INV-2026-031 already narrates for this cluster.
-    { id: "wtx_006f6g7h8i9j0k1l2m3n4o5", walletId: "wal_w1a9k4n7t2vqmxz6ryc0h5bd", entityId: "ent_2fazmtzljxq1u25vcqrzr1yi", networkId: netN067.id, direction: "OUTBOUND", amountBtcEq: 2.1, occurredAt: new Date("2026-08-05T06:10:00+00:00") }, // -> DUTCHBULK
-    { id: "wtx_007g7h8i9j0k1l2m3n4o5p6", walletId: "wal_w2c7m3x9q1vryhz5tbk0n8f4", entityId: "ent_2fazmtzljxq1u25vcqrzr1yi", networkId: netN067.id, direction: "OUTBOUND", amountBtcEq: 1.5, occurredAt: new Date("2026-08-06T07:35:00+00:00") }, // -> DUTCHBULK
-    // WALLET-W3/W4 (Cluster-C2) <-> N-031 entities — unrelated to
-    // INV-2026-042, kept as a control so relevance stays entity/network
-    // specific rather than "every wallet shows up everywhere".
-    { id: "wtx_008h8i9j0k1l2m3n4o5p6q7", walletId: "wal_w3f2b8h5k1tyrvz9mqxc4n7d", entityId: "ent_71kf7ep57waaq4s375mblf7d", networkId: netN031.id, direction: "OUTBOUND", amountBtcEq: 0.3, occurredAt: new Date("2026-08-09T12:00:00+00:00") }, // -> montana193
-    { id: "wtx_009i9j0k1l2m3n4o5p6q7r8", walletId: "wal_w4n6q0v3x8tzrymb1hc5k9f", entityId: "ent_bus6n2achj04ej8dqgy1m7al", networkId: netN031.id, direction: "INBOUND",  amountBtcEq: 0.2, occurredAt: new Date("2026-08-10T15:44:00+00:00") }, // <- cerberus
-  ] as const
+  await prisma.graphNode.upsert({
+    where: { id: "gph_alias_x" }, update: {},
+    create: { id: "gph_alias_x", label: "Alias_X", type: "ENTITY", risk: 84, x: 420, y: 240, entityId: "ent_1xrdh2up5txj6u7usgd8psmf" },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_alias_y" }, update: {},
+    create: { id: "gph_alias_y", label: "Alias_Y", type: "ENTITY", risk: 71, x: 680, y: 180, entityId: "ent_lvwg0jr1ws23e7ytwpsgoupu" },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_market_a" }, update: {},
+    create: { id: "gph_market_a", label: "Marketplace_A", type: "MARKET", risk: 72, x: 240, y: 340 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_market_b" }, update: {},
+    create: { id: "gph_market_b", label: "Marketplace_B", type: "MARKET", risk: 49, x: 330, y: 150 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_listing_17" }, update: {},
+    create: { id: "gph_listing_17", label: "Listing_017", type: "LISTING", risk: 58, x: 148, y: 460 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_wallet_w1" }, update: {},
+    create: { id: "gph_wallet_w1", label: "Wallet_W1", type: "WALLET", risk: 87, x: 560, y: 350 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_wallet_w2" }, update: {},
+    create: { id: "gph_wallet_w2", label: "Wallet_W2", type: "WALLET", risk: 74, x: 620, y: 480 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_comm_04" }, update: {},
+    create: { id: "gph_comm_04", label: "Comm_ID_04", type: "COMM", risk: 62, x: 520, y: 130 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_txn_001" }, update: {},
+    create: { id: "gph_txn_001", label: "Txn_3f8a", type: "TXN", risk: 55, x: 690, y: 380 },
+  })
+  await prisma.graphNode.upsert({
+    where: { id: "gph_alias_z" }, update: {},
+    create: { id: "gph_alias_z", label: "Alias_Z", type: "ENTITY", risk: 52, x: 780, y: 290, entityId: "ent_8gc0m2lwr3qoaocu2h09dmeh" },
+  })
 
-  for (const txn of walletTxnSeeds) {
-    await prisma.walletTransaction.upsert({
-      where: { id: txn.id },
-      update: {},
-      create: txn,
+  const graphEdgeSeeds: [string, string, string][] = [
+    ["gph_alias_x", "gph_market_a", "Appeared On"],
+    ["gph_alias_x", "gph_market_b", "Appeared On"],
+    ["gph_alias_x", "gph_wallet_w1", "Transacted With"],
+    ["gph_alias_x", "gph_comm_04", "Linked To"],
+    ["gph_market_a", "gph_listing_17", "Contains"],
+    ["gph_wallet_w1", "gph_wallet_w2", "Transacted With"],
+    ["gph_wallet_w1", "gph_alias_y", "Associated With"],
+    ["gph_wallet_w2", "gph_txn_001", "Transacted With"],
+    ["gph_alias_y", "gph_market_a", "Appeared On"],
+    ["gph_alias_y", "gph_alias_z", "Shared Identifier"],
+    ["gph_txn_001", "gph_alias_z", "Associated With"],
+  ]
+  for (const [fromId, toId, label] of graphEdgeSeeds) {
+    const id = `gph_edge_${fromId}_${toId}`
+    await prisma.graphEdge.upsert({
+      where: { id }, update: {},
+      create: { id, fromId, toId, label },
     })
   }
 
-  console.log(`Wallet transactions created: ${walletTxnSeeds.length}`)
-
-  // ─── Network graph (GraphNode / GraphEdge) ───────────────────────────────────
-  // Generated via the same shared function the live API uses on every
-  // GET /api/graph request (see src/lib/graphSync.ts) — so seed-time and
-  // runtime graph generation never drift apart, and the graph doesn't need
-  // to be manually reseeded as new entities are added later.
-
-  const { nodeCount, edgeCount } = await syncGraphFromEntities(prisma)
-  console.log(`Graph nodes/edges created: ${nodeCount} / ${edgeCount}`)
+  console.log('Graph nodes/edges created: 10 / 11')
 
   // ─── Investigations ───────────────────────────────────────────────────────
 

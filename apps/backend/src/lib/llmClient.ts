@@ -89,7 +89,7 @@ async function callGroq<T>(opts: {
     throw new LlmError(`Groq API returned ${res.status}: ${text.slice(0, 300)}`);
   }
 
-  const data: any = await res.json().catch(() => {
+  const data = await res.json().catch(() => {
     throw new LlmError("Groq response was not valid JSON at the HTTP level");
   });
 
@@ -155,7 +155,7 @@ async function callGemini<T>(opts: {
     throw new LlmError(`Gemini API returned ${res.status}: ${text.slice(0, 300)}`);
   }
 
-  const data: any = await res.json().catch(() => {
+  const data = await res.json().catch(() => {
     throw new LlmError("Gemini response was not valid JSON at the HTTP level");
   });
 

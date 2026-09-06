@@ -1,38 +1,19 @@
-import { useState, useEffect, useRef } from "react";
-import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
-import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
-} from "../data";
-import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
-  PulseIndicator, BarContrib, TimelineView,
-} from "../components/shared";
-import { getSocket, EVENT_META } from "../lib/socket";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+import { useState, useEffect } from "react";
+import { riskColor, riskColorLight, riskBg, riskBorder } from "../data";
+import { RiskBadge, PulseIndicator } from "../components/shared";
+import { getSocket } from "../lib/socket";
+import { apiGet, apiPatch } from "../lib/api";
 
 export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
   const [tab, setTab] = useState("All");
   const tabs = ["All","Critical","High","Medium","Resolved"];
-  const [alertRows, setAlertRows] = useState<any[]>(alerts);
+  const [alertRows, setAlertRows] = useState<any[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(true);
   const [alertsError, setAlertsError] = useState<string|null>(null);
+  const [updatingId, setUpdatingId] = useState<string|null>(null);
 
   const loadAlerts = () => {
-    fetch("http://localhost:4000/api/alerts")
-      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+    apiGet<any[]>("/api/alerts")
       .then(data => {
         // normalise DB rows to match the shape the UI expects. Note:
         // a.severity is the historical value at alert-creation time and is
@@ -80,6 +61,18 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
     return true;
   });
 
+  const updateStatus = async (displayId: string, status: "REVIEWED" | "RESOLVED") => {
+    setUpdatingId(displayId);
+    try {
+      await apiPatch(`/api/alerts/${encodeURIComponent(displayId)}/status`, { status });
+      loadAlerts();
+    } catch {
+      // loadAlerts() failing to update is surfaced via the normal error banner on next load
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
   return (
     <div style={{padding:"26px 28px"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
@@ -98,7 +91,8 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
       </div>
 
       {alertsLoading && <p className="page-sub" style={{marginBottom:12}}>Loading alerts…</p>}
-      {alertsError && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({alertsError}) — showing demo data.</p>}
+      {alertsError && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({alertsError}).</p>}
+      {!alertsLoading && !alertsError && alertRows.length === 0 && <p className="page-sub" style={{marginBottom:12}}>No alerts recorded yet.</p>}
       <div className="tab-strip" style={{marginBottom:18}}>
         {tabs.map(t=>{
           const count = t==="All"?alertRows.length:t==="Resolved"?alertRows.filter(a=>a.status==="resolved").length:t==="Critical"?alertRows.filter(a=>a.severity>=80&&a.status!=="resolved").length:t==="High"?alertRows.filter(a=>a.severity>=60&&a.severity<80&&a.status!=="resolved").length:alertRows.filter(a=>a.severity>=40&&a.severity<60&&a.status!=="resolved").length;
@@ -150,9 +144,13 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
                 </div>
                 <div style={{fontSize:11,color:"var(--text-4)"}}>{a.time}</div>
                 <div style={{display:"flex",gap:6}}>
-                  <button className="btn btn-primary btn-sm" onClick={()=>navigate("workspace")}>Investigate</button>
+                  <button className="btn btn-primary btn-sm" onClick={()=>a.network ? navigate("network-risk", a.network) : navigate("entities")}>Investigate</button>
                   <button className="btn btn-ghost btn-sm" onClick={()=>navigate("graph")}>View Graph</button>
-                  <button className="btn btn-ghost btn-sm">Dismiss</button>
+                  {a.status!=="resolved" && (
+                    <button className="btn btn-ghost btn-sm" disabled={updatingId===a.displayId} onClick={()=>updateStatus(a.displayId, "RESOLVED")}>
+                      {updatingId===a.displayId ? "…" : "Dismiss"}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
