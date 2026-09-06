@@ -47,9 +47,6 @@ export function Sidebar({ current, navigate }: { current: string; navigate: (s: 
         <div className={`nav-item ${current==="admin"?"active":""}`} onClick={()=>navigate("admin")}>
           <span style={{fontSize:13}}>⊞</span><span className="label">Admin</span>
         </div>
-        <div className="nav-item">
-          <span style={{fontSize:13}}>⚙</span><span className="label">Settings</span>
-        </div>
         <div style={{margin:"8px 4px 0",padding:"9px 12px",background:"rgba(99,102,241,0.08)",borderRadius:8,border:"1px solid rgba(99,102,241,0.14)"}}>
           <div style={{fontSize:12,fontWeight:600,color:"var(--text-1)"}}>Investigator A</div>
           <div style={{fontSize:10,color:"var(--accent-hi)",marginTop:1}}>Senior Investigator</div>
