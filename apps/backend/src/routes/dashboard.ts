@@ -145,7 +145,7 @@ dashboardRouter.get("/kpis", async (_req, res) => {
 // than inventing numbers, and the frontend is expected to show an honest
 // "not enough data" state instead of a fake curve.
 analyticsRouter.get("/overview", async (_req, res) => {
-  const days = lastNDays(9);
+  const days = lastNDays(30);
 
   const [alerts, entities, listings, networks, riskEvents] = await Promise.all([
     prisma.alert.findMany({ select: { createdAt: true, severity: true, status: true } }),

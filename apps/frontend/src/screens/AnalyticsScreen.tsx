@@ -39,7 +39,7 @@ export function AnalyticsScreen() {
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
         <div className="card" style={{padding:20}}>
-          <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:4}}>Suspicious Activity — Last 9 Days</div>
+          <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:4}}>Suspicious Activity — Last 30 Days</div>
           <div style={{fontSize:11,color:"var(--text-3)",marginBottom:16}}>Average alert severity and alert count per day</div>
           {activityTimeline.every((d:any)=>d.alerts===0) ? (
             <div style={{padding:"30px 0",textAlign:"center",color:"var(--text-4)",fontSize:12}}>No alert activity recorded in this window yet.</div>

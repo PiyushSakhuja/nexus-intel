@@ -3083,6 +3083,12 @@ async function main() {
       },
     },
   })
+  // NOTE ALT-089's createdAt stays "2 minutes ago" on purpose — it's the
+  // one alert meant to read as freshly landed on the Overview live feed.
+  // ALT-088 through ALT-084 below are spread across the last 30 days
+  // instead of all clustering in the last few hours, so the "Suspicious
+  // Activity — Last 30 Days" chart shows real day-to-day variation
+  // instead of 29 empty days + one spike.
 
   await prisma.alert.upsert({
     where: { displayId: "ALT-088" },
@@ -3094,7 +3100,7 @@ async function main() {
       title: "New wallet relationship detected in tracked cluster",
       reason: "Wallet linked to known high-risk cluster; cross-source identifier match confidence 87%",
       status: "NEW",
-      createdAt: new Date(Date.now() - 14 * 60 * 1000),
+      createdAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000),
       entities: {
         create: [
           { entityId: "ent_lvwg0jr1ws23e7ytwpsgoupu" }, // HappyEyes
@@ -3113,7 +3119,7 @@ async function main() {
       title: "Repeated identifier observed across 3 intelligence sources",
       reason: "Same communication identifier appeared across Source Alpha, Beta, and Gamma independently",
       status: "REVIEWED",
-      createdAt: new Date(Date.now() - 31 * 60 * 1000),
+      createdAt: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000),
       entities: {
         create: [
           { entityId: "ent_8gc0m2lwr3qoaocu2h09dmeh" }, // OnePiece
@@ -3132,7 +3138,7 @@ async function main() {
       title: "Listing activity spike in monitored category",
       reason: "Listing frequency increased 340% over baseline in a 4-hour window",
       status: "REVIEWED",
-      createdAt: new Date(Date.now() - 72 * 60 * 1000),
+      createdAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000),
       entities: { create: [] },
     },
   })
@@ -3147,7 +3153,7 @@ async function main() {
       title: "Entity resolution confidence exceeded 95% threshold",
       reason: "Cross-source entity correlation achieved 96% match confidence across 3 independent sources",
       status: "RESOLVED",
-      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      createdAt: new Date(Date.now() - 22 * 24 * 60 * 60 * 1000),
       entities: {
         create: [
           { entityId: "ent_73ueeguxfcv4jp6qpoy1sc0q" }, // RepAAA
@@ -3166,7 +3172,7 @@ async function main() {
       title: "Blockchain cluster Cluster-C1 shows abnormal outflow",
       reason: "Transaction volume 5.2x above 30-day moving average; timing correlation with listing activity",
       status: "RESOLVED",
-      createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
+      createdAt: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
       entities: {
         create: [
           { entityId: "ent_2fazmtzljxq1u25vcqrzr1yi" }, // DUTCHBULK

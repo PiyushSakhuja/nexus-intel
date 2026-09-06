@@ -10,6 +10,8 @@
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
     "db:seed": "tsx prisma/seed.ts",
+    "db:import-datadump": "tsx prisma/importDatadump.ts",
+    "db:generate-activity": "tsx prisma/generateActivity.ts",
     "db:studio": "prisma studio",
     "db:reset": "prisma migrate reset --force"
   },
