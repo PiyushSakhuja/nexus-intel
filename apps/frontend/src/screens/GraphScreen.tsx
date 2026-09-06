@@ -508,7 +508,7 @@ const [mode, setMode] = useState<"entity" | "network">("entity");
 const [liveNodes, setLiveNodes] = useState<any[]>([]);
 const [liveEdges, setLiveEdges] = useState<any[]>([]);
 const [visibleTypes, setVisibleTypes] = useState<Set<string>>(
-  new Set(ALL_TYPES.filter((type) => type !== "listing"))
+  new Set(ALL_TYPES.filter((type) => type !== "listing" && type !== "txn"))
 );
 
 // Fetch state — shared by both the global graph (/api/graph) and the
