@@ -47,7 +47,7 @@ export default function App() {
       if (displayId) {
         setWorkspaceDisplayId(displayId);
         // The workspace is the natural anchor for "which case is this
-        // Timeline for" — keep them pointed at the same investigation.
+        // Timeline for" — 
         setTimelineDisplayId(displayId);
       }
     }
