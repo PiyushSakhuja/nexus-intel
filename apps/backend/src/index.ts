@@ -12,7 +12,7 @@ import { investigationsRouter } from "./routes/investigations.js";
 import { graphRouter } from "./routes/graph.js";
 import { simulateRouter } from "./routes/simulate.js";
 import { vendorsRouter } from "./routes/vendors.js";
-import { dashboardRouter, analyticsRouter } from "./routes/Dashboard.js";
+import { dashboardRouter, analyticsRouter } from "./routes/dashboard.js";
 import { searchRouter } from "./routes/search.js";
 import {
   evidenceRouter,

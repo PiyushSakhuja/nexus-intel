@@ -152,7 +152,12 @@ analyticsRouter.get("/overview", async (_req, res) => {
     prisma.entity.findMany({ select: { alias: true, createdAt: true } }),
     prisma.listing.findMany({ include: { source: true } }),
     prisma.network.findMany({ include: { riskPoints: { orderBy: { recordedAt: "asc" } } } }),
-    prisma.riskEvent.findMany({ select: { createdAt: true, delta: true } }),
+    prisma.riskEvent.findMany({
+      select: {
+        createdAt: true,
+        scoreDelta: true,
+      },
+    }),
   ]);
 
   // Suspicious activity over time: alert count + average severity by day.

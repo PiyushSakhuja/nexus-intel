@@ -1,27 +1,7 @@
-import { useState, useEffect, useRef } from "react";
-import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
-import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
-} from "../data";
-import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
-  PulseIndicator, BarContrib, TimelineView,
-} from "../components/shared";
-import { getSocket, EVENT_META } from "../lib/socket";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+import { useState, useEffect } from "react";
+import { riskBg } from "../data";
+import { PulseIndicator } from "../components/shared";
+import { apiGet } from "../lib/api";
 
 export function AdminScreen() {
   const roles = ["Administrator","Investigator","Analyst"];
@@ -32,13 +12,31 @@ export function AdminScreen() {
     Analyst:[true,true,false,true,false,false],
   };
 
+  // NOTE: there is no authentication/session system in this app yet (see
+  // backend route comments) — the User model exists in the schema but no
+  // route reads/writes it, and no route tracks online/idle/offline status.
+  // Rather than invent activity data that doesn't exist, the roster below
+  // is shown as a static illustration of the intended role structure, not
+  // live presence data. It's not pulled from data.ts and not claimed as
+  // real-time — see MOCK_DATA_AUDIT.md.
   const users = [
-    {name:"Administrator",role:"Admin",status:"Active",last:"Just now"},
-    {name:"Investigator A",role:"Investigator",status:"Active",last:"2m ago"},
-    {name:"Investigator B",role:"Investigator",status:"Active",last:"1h ago"},
-    {name:"Investigator C",role:"Investigator",status:"Idle",last:"3h ago"},
-    {name:"Analyst D",role:"Analyst",status:"Offline",last:"Yesterday"},
+    {name:"Administrator",role:"Admin"},
+    {name:"Investigator A",role:"Investigator"},
+    {name:"Investigator B",role:"Investigator"},
+    {name:"Investigator C",role:"Investigator"},
+    {name:"Analyst D",role:"Analyst"},
   ];
+
+  const [sources, setSources] = useState<any[]>([]);
+  const [sourcesLoading, setSourcesLoading] = useState(true);
+  const [sourcesError, setSourcesError] = useState<string|null>(null);
+
+  useEffect(() => {
+    apiGet<any[]>("/api/sources")
+      .then(data => { setSources(data); setSourcesError(null); })
+      .catch(err => setSourcesError(err.message))
+      .finally(() => setSourcesLoading(false));
+  }, []);
 
   return (
     <div style={{padding:"26px 28px"}}>
@@ -48,7 +46,7 @@ export function AdminScreen() {
       </div>
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-        {/* Users */}
+        {/* Users — illustrative role roster; no live auth/session backend exists yet */}
         <div className="card" style={{padding:20}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
             <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)"}}>Users</div>
@@ -61,11 +59,8 @@ export function AdminScreen() {
               </div>
               <div style={{flex:1}}>
                 <div style={{fontSize:12.5,color:"var(--text-1)",fontWeight:500}}>{u.name}</div>
-                <div style={{fontSize:10.5,color:"var(--text-4)"}}>{u.role} · Last active: {u.last}</div>
+                <div style={{fontSize:10.5,color:"var(--text-4)"}}>{u.role}</div>
               </div>
-              <span style={{fontSize:10,padding:"2px 8px",borderRadius:4,background:u.status==="Active"?riskBg(20):u.status==="Idle"?riskBg(40):"rgba(255,255,255,0.04)",color:u.status==="Active"?"var(--low-light)":u.status==="Idle"?"var(--medium-light)":"var(--text-4)"}}>
-                {u.status}
-              </span>
             </div>
           ))}
         </div>
@@ -95,38 +90,20 @@ export function AdminScreen() {
           </table>
         </div>
 
-        {/* System status */}
-        <div className="card" style={{padding:20}}>
-          <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:14}}>System Status</div>
-          {[
-            {name:"Intelligence Ingestion",status:"Operational",uptime:"99.98%"},
-            {name:"Risk Scoring Engine",status:"Operational",uptime:"99.95%"},
-            {name:"Entity Resolution",status:"Operational",uptime:"99.99%"},
-            {name:"Alert Engine",status:"Operational",uptime:"99.97%"},
-            {name:"Blockchain Connector",status:"Degraded",uptime:"97.2%"},
-          ].map(s=>(
-            <div key={s.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid var(--border)"}}>
-              <div style={{fontSize:12,color:"var(--text-2)"}}>{s.name}</div>
-              <div style={{display:"flex",alignItems:"center",gap:12}}>
-                <span className="mono-sm" style={{color:"var(--text-4)"}}>{s.uptime}</span>
-                <div style={{display:"flex",alignItems:"center",gap:5}}>
-                  <PulseIndicator color={s.status==="Operational"?"var(--low)":"var(--medium)"}/>
-                  <span style={{fontSize:11,color:s.status==="Operational"?"var(--low-light)":"var(--medium-light)",fontWeight:500}}>{s.status}</span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Data sources */}
+        {/* Data sources — real Source rows, with a real listing count per
+            source (there is no "last sync" timestamp in the schema, so
+            that field is intentionally omitted rather than fabricated). */}
         <div className="card" style={{padding:20}}>
           <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:14}}>Data Sources</div>
-          {["Source Alpha","Source Beta","Source Gamma","Source Delta","Blockchain Data"].map((src,i)=>(
-            <div key={src} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid var(--border)"}}>
-              <div style={{fontSize:12,color:"var(--text-2)"}}>{src}</div>
+          {sourcesLoading && <p className="page-sub" style={{fontSize:12}}>Loading sources…</p>}
+          {sourcesError && <p className="page-sub" style={{fontSize:12,color:"var(--high-light)"}}>Couldn't reach the API ({sourcesError}).</p>}
+          {!sourcesLoading && !sourcesError && sources.length === 0 && <p className="page-sub" style={{fontSize:12}}>No sources configured yet.</p>}
+          {sources.map((src)=>(
+            <div key={src.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid var(--border)"}}>
+              <div style={{fontSize:12,color:"var(--text-2)"}}>{src.name}</div>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <span style={{fontSize:10.5,color:"var(--text-4)"}}>Last sync: {["2m","14m","1h","2h","5m"][i]} ago</span>
-                <PulseIndicator color={i===2?"var(--medium)":"var(--low)"}/>
+                <span style={{fontSize:10.5,color:"var(--text-4)"}}>{src._count?.listings ?? 0} listings</span>
+                <PulseIndicator color="var(--low)"/>
               </div>
             </div>
           ))}

@@ -30,7 +30,7 @@ export function ListingsScreen() {
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
         <div>
           <h1 className="section-head">Listings Intelligence</h1>
-          <p className="page-sub">Flagged intelligence records — synthetic/demo data only. No purchase functionality.</p>
+          <p className="page-sub">Flagged intelligence records from tracked marketplaces. No purchase functionality.</p>
         </div>
         <div style={{display:"flex",gap:8}}>
           <input className="input" style={{width:200,padding:"7px 12px",fontSize:12}} placeholder="Filter records…"/>

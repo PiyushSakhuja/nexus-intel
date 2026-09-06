@@ -1,30 +1,21 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
+  AreaChart, Area,
   PieChart, Pie, Cell, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
+import { riskColor, riskColorLight } from "../data";
 import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
-} from "../data";
-import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
-  PulseIndicator, BarContrib, TimelineView,
+  Sparkline, CustomTooltip, PulseIndicator,
 } from "../components/shared";
 import { getSocket, EVENT_META } from "../lib/socket";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+import { apiGet, apiPost } from "../lib/api";
 
 export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
-  const [liveNetworks, setLiveNetworks] = useState<any[]>(emergingNetworks);
+  const [liveNetworks, setLiveNetworks] = useState<any[]>([]);
+  const [kpis, setKpis] = useState<any[]>([]);
+  const [activityTimeline, setActivityTimeline] = useState<any[]>([]);
+  const [riskDistribution, setRiskDistribution] = useState<any[]>([]);
 
   // ── Live feed state ──────────────────────────────────────────────────────
   const [feedEvents, setFeedEvents] = useState<any[]>([]);
@@ -32,10 +23,9 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
   const [simulating, setSimulating] = useState(false);
   const feedRef = useRef<HTMLDivElement>(null);
 
-  // ── Fetch initial networks ───────────────────────────────────────────────
-  useEffect(() => {
-    fetch("http://localhost:4000/api/networks")
-      .then(res => { if (!res.ok) throw new Error(); return res.json(); })
+  // ── Fetch initial networks + KPIs + analytics ────────────────────────────
+  const loadDashboard = () => {
+    apiGet<any[]>("/api/networks")
       .then(data => {
         const normalised = data.map((n: any) => ({
           ...n,
@@ -45,10 +35,21 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
           entities: n._count?.entities ?? n.entities ?? 0,
           last: n.updatedAt ? new Date(n.updatedAt).toLocaleDateString() : n.last ?? "—",
         }));
-        if (normalised.length > 0) setLiveNetworks(normalised);
+        setLiveNetworks(normalised);
       })
       .catch(() => {});
-  }, []);
+    apiGet<any>("/api/dashboard/kpis")
+      .then(data => setKpis(data.kpis ?? []))
+      .catch(() => {});
+    apiGet<any>("/api/analytics/overview")
+      .then(data => {
+        setActivityTimeline(data.activityTimeline ?? []);
+        setRiskDistribution(data.riskDistribution ?? []);
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => { loadDashboard(); }, []);
 
   // ── Socket.IO subscription ───────────────────────────────────────────────
   useEffect(() => {
@@ -75,22 +76,11 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
         time: now.toLocaleTimeString(),
       }, ...prev].slice(0, 50)); // keep last 50
 
-      // If a risk_updated arrived, refresh the networks table
+      // If a risk_updated or alert arrived, refresh networks + KPIs +
+      // analytics so the whole dashboard reflects the new state live,
+      // not just the feed list.
       if (evt.type === "risk_updated" || evt.type === "alert_generated") {
-        fetch("http://localhost:4000/api/networks")
-          .then(r => r.json())
-          .then(data => {
-            const n = data.map((n: any) => ({
-              ...n,
-              id: n.displayId ?? n.id,
-              risk: n.risk ?? 0,
-              change: n.riskDelta ?? n.change ?? 0,
-              entities: n._count?.entities ?? n.entities ?? 0,
-              last: n.updatedAt ? new Date(n.updatedAt).toLocaleDateString() : n.last ?? "—",
-            }));
-            if (n.length > 0) setLiveNetworks(n);
-          })
-          .catch(() => {});
+        loadDashboard();
       }
     };
 
@@ -112,26 +102,12 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
   }, [feedEvents.length]);
 
   // ── Simulate button handler ──────────────────────────────────────────────
-  // Deliberately targets N-018, NOT liveNetworks[0]. liveNetworks[0] is
-  // sorted by risk descending, so it's almost always the network that's
-  // ALREADY at/above the CRITICAL threshold (N-042, seeded at 91) — and the
-  // backend only fires an alert on the moment risk CROSSES the threshold,
-  // not just because it's already above it. Targeting the already-critical
-  // network means clicking Simulate does nothing visible, forever.
-  // N-018 (seeded 78) is the highest-risk network still below threshold,
-  // and with the risk engine's per-click delta for its lead entity (+6,
-  // deterministic as of the entityRisk/vendorRisk rework), it crosses 80
-  // on the FIRST click, guaranteed, every time. Verified against the real
-  // scoring code + real seed data, not assumed.
   const handleSimulate = async () => {
     setSimulating(true);
     try {
-      const targetNetwork = "N-018";
-      await fetch("http://localhost:4000/api/simulate/event", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ networkDisplayId: targetNetwork }),
-      });
+      // Pick the first network from liveNetworks; fall back to N-018
+      const targetNetwork = liveNetworks[0]?.id ?? "N-018";
+      await apiPost("/api/simulate/event", { networkDisplayId: targetNetwork });
     } catch (_) { /* socket events will show what happened */ }
     finally { setSimulating(false); }
   };
@@ -171,13 +147,10 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
       {/* KPI row */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:13,marginBottom:22}}>
         {kpis.map((k,i)=>(
-          <div key={k.label} className={`card card-hover anim-fade-up delay-${i+1}`} style={{padding:"16px 18px"}}>
+          <div key={k.label} className={`card card-hover anim-fade-up delay-${i+1}`} style={{padding:"16px 18px",position:"relative"}}>
             <div style={{fontSize:10,color:"var(--text-3)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:10}}>{k.label}</div>
             <div style={{display:"flex",alignItems:"flex-end",justifyContent:"space-between"}}>
-              <div>
-                <div className="display" style={{fontSize:28,fontWeight:700,color:"var(--text-1)",lineHeight:1}}>{k.value}</div>
-                <div style={{fontSize:11,marginTop:5,color:k.up?"var(--low-light)":"var(--critical-light)"}}>{k.change}</div>
-              </div>
+              <div className="display" style={{fontSize:28,fontWeight:700,color:"var(--text-1)",lineHeight:1}}>{k.value}</div>
               <Sparkline data={k.spark} color={k.accent}/>
             </div>
             <div style={{position:"absolute",top:14,right:14,width:5,height:5,borderRadius:"50%",background:k.accent,boxShadow:`0 0 8px ${k.accent}80`}}/>
@@ -200,6 +173,9 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
               ))}
             </div>
           </div>
+          {activityTimeline.length === 0 ? (
+            <div style={{padding:"60px 0",textAlign:"center",color:"var(--text-4)",fontSize:12}}>No activity data yet.</div>
+          ) : (
           <ResponsiveContainer width="100%" height={210}>
             <AreaChart data={activityTimeline}>
               <defs>
@@ -220,12 +196,16 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
               <Area type="monotone" dataKey="alerts" stroke="#f87171" strokeWidth={1.5} fill="url(#tl-alert)" name="Alerts"/>
             </AreaChart>
           </ResponsiveContainer>
+          )}
         </div>
 
         {/* Risk donut */}
         <div className="card" style={{padding:20}}>
           <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:4}}>Risk Distribution</div>
           <div style={{fontSize:11,color:"var(--text-3)",marginBottom:12}}>Entities by risk level</div>
+          {riskDistribution.every(d=>d.value===0) ? (
+            <div style={{padding:"40px 0",textAlign:"center",color:"var(--text-4)",fontSize:12}}>No entities recorded yet.</div>
+          ) : (
           <ResponsiveContainer width="100%" height={170}>
             <PieChart>
               <Pie data={riskDistribution} cx="50%" cy="50%" innerRadius={52} outerRadius={76} paddingAngle={3} dataKey="value">
@@ -236,6 +216,7 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
               <Tooltip content={<CustomTooltip/>}/>
             </PieChart>
           </ResponsiveContainer>
+          )}
           <div style={{display:"flex",flexDirection:"column",gap:6,marginTop:4}}>
             {riskDistribution.map(d=>(
               <div key={d.name} style={{display:"flex",alignItems:"center",justifyContent:"space-between",fontSize:11.5}}>
@@ -261,6 +242,9 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
             </div>
             <button className="btn btn-ghost btn-sm" onClick={()=>navigate("alerts")}>All Alerts</button>
           </div>
+          {liveNetworks.length === 0 ? (
+            <div style={{padding:"20px 0",textAlign:"center",color:"var(--text-4)",fontSize:12}}>No networks tracked yet.</div>
+          ) : (
           <table className="data-table">
             <thead><tr><th>Network ID</th><th>Risk</th><th>Change</th><th>Entities</th><th>Last Activity</th></tr></thead>
             <tbody>
@@ -282,6 +266,7 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
               ))}
             </tbody>
           </table>
+          )}
         </div>
 
         {/* Live Intelligence Feed */}

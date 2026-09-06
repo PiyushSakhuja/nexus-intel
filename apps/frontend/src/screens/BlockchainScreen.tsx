@@ -30,9 +30,8 @@ export function BlockchainScreen() {
       .finally(() => setWalletsLoading(false));
   }, []);
 
-  // Derived from walletRows (real once the /api/wallets fetch lands, mock
-  // data otherwise) instead of hardcoded numbers that never matched what
-  // the table below actually showed.
+  // Derived from walletRows once the /api/wallets fetch resolves — real
+  // numbers, computed here rather than a separately-maintained hardcoded KPI set.
   const totalTxns = walletRows.reduce((sum, w) => sum + (w.txns ?? 0), 0);
   const blockKpis = [
     {label:"Tracked Wallets",val:String(walletRows.length),color:"#6366f1"},
@@ -61,7 +60,8 @@ export function BlockchainScreen() {
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           {/* Wallet table */}
           {walletsLoading && <p className="page-sub" style={{marginBottom:8,paddingLeft:16}}>Loading wallets…</p>}
-          {walletsError && <p className="page-sub" style={{marginBottom:8,paddingLeft:16,color:"var(--high-light)"}}>Couldn't reach the API — showing demo data.</p>}
+          {walletsError && <p className="page-sub" style={{marginBottom:8,paddingLeft:16,color:"var(--high-light)"}}>Couldn't reach the API ({walletsError}).</p>}
+          {!walletsLoading && !walletsError && walletRows.length === 0 && <p className="page-sub" style={{marginBottom:8,paddingLeft:16}}>No wallets tracked yet.</p>}
           <div className="card">
             <table className="data-table">
               <thead><tr><th>Wallet ID</th><th>Risk</th><th>Transactions</th><th>Entities</th><th>Cluster</th><th>Volume</th><th>Last Active</th></tr></thead>
@@ -91,24 +91,37 @@ export function BlockchainScreen() {
             </table>
           </div>
 
-          {/* Transaction timeline */}
+          {/* Wallet summary — no per-day transaction volume exists in the
+              schema (Wallet has no time-series data), so this shows real
+              aggregate fields instead of a fabricated bar chart. */}
+          {sel && (
           <div className="card" style={{padding:20}}>
-            <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:4}}>Transaction Volume — {sel.id}</div>
-            <div style={{fontSize:11,color:"var(--text-3)",marginBottom:16}}>Synthetic volume by date (BTC-equivalent)</div>
-            <ResponsiveContainer width="100%" height={160}>
-              <BarChart data={walletClusterData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)"/>
-                <XAxis dataKey="date" tick={{fill:"var(--text-4)",fontSize:10}} axisLine={false} tickLine={false}/>
-                <YAxis tick={{fill:"var(--text-4)",fontSize:10}} axisLine={false} tickLine={false}/>
-                <Tooltip content={<CustomTooltip/>}/>
-                <Bar dataKey="vol" fill="var(--cyan)" radius={[4,4,0,0]} name="Volume" opacity={0.85}/>
-                <Bar dataKey="txns" fill="var(--accent)" radius={[4,4,0,0]} name="Txns" opacity={0.6}/>
-              </BarChart>
-            </ResponsiveContainer>
+            <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:4}}>Wallet Summary — {sel.id}</div>
+            <div style={{fontSize:11,color:"var(--text-3)",marginBottom:16}}>Aggregate figures from the wallet record</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:14}}>
+              <div>
+                <div style={{fontSize:10,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.06em"}}>Total Volume</div>
+                <div className="mono" style={{fontSize:18,fontWeight:700,color:"var(--text-1)"}}>{sel.totalVol}</div>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.06em"}}>Transactions</div>
+                <div className="mono" style={{fontSize:18,fontWeight:700,color:"var(--text-1)"}}>{sel.txns}</div>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.06em"}}>Linked Entities</div>
+                <div className="mono" style={{fontSize:18,fontWeight:700,color:"var(--text-1)"}}>{sel.entities}</div>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.06em"}}>Active Window</div>
+                <div className="mono" style={{fontSize:13,fontWeight:600,color:"var(--text-2)"}}>{sel.first} – {sel.last}</div>
+              </div>
+            </div>
           </div>
+          )}
         </div>
 
         {/* Wallet detail */}
+        {sel && (
         <div className="card" style={{padding:20,height:"fit-content"}}>
           <div style={{fontSize:10.5,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Selected Wallet</div>
           <div className="mono" style={{fontSize:14,fontWeight:600,color:"var(--cyan)",marginBottom:8}}>{sel.id}</div>
@@ -134,6 +147,7 @@ export function BlockchainScreen() {
           ))}
           <button className="btn btn-primary" style={{width:"100%",justifyContent:"center",marginTop:16}}>Add to Investigation</button>
         </div>
+        )}
       </div>
     </div>
   );

@@ -129,5 +129,5 @@ auditRouter.get("/", async (_req, res) => {
 });
 
 sourcesRouter.get("/", async (_req, res) => {
-  res.json(await prisma.source.findMany());
+  res.json(await prisma.source.findMany({ include: { _count: { select: { listings: true } } } }));
 });

@@ -1,27 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
-import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
-} from "../data";
-import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
-  PulseIndicator, BarContrib, TimelineView,
-} from "../components/shared";
-import { getSocket, EVENT_META } from "../lib/socket";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+import { RingScore, RiskBadge, PulseIndicator } from "../components/shared";
+import { getSocket } from "../lib/socket";
+import { apiGet, apiPost, apiPatch, apiDelete } from "../lib/api";
 
 // -- Model options (keep in sync with backend/src/lib/llmClient.ts) ----------
 // llama-3.3-70b-versatile and llama-3.1-8b-instant were decommissioned by
@@ -227,7 +207,7 @@ export function WorkspaceScreen({
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
 
   // ─── Real investigation data ────────────────────────────────────────────
-  const [inv, setInv] = useState<any>(investigations[0]);
+  const [inv, setInv] = useState<any>(null);
   const [invLoading, setInvLoading] = useState(true);
   const [invError, setInvError] = useState<string | null>(null);
 
@@ -262,6 +242,18 @@ export function WorkspaceScreen({
         updated: data.updatedAt ? new Date(data.updatedAt).toLocaleString() : data.updated ?? "",
         description: data.description ?? "",
         relatedEntities: (data.entities ?? []).map((ie: any) => ie.entity),
+        // Real evidence rows for THIS investigation, normalised to the shape
+        // the Evidence panel renders. Previously the panel ignored this
+        // entirely and always rendered the hardcoded `evidenceRecords` mock
+        // array regardless of which case was open.
+        evidenceItems: (data.evidence ?? []).map((ev: any) => ({
+          id: ev.displayId ?? ev.id,
+          type: ev.type,
+          hash: ev.hash,
+          status: ev.status,
+          uploadedBy: ev.uploadedBy,
+          createdAt: ev.createdAt,
+        })),
         latestAssessment: data.aiAssessments?.[0] ?? null,
       });
 
@@ -376,153 +368,6 @@ export function WorkspaceScreen({
     }
   };
 
-  // ─── Action button modals ────────────────────────────────────────────────
-  const [showAddEvidence, setShowAddEvidence] = useState(false);
-  const [showAddEntity, setShowAddEntity] = useState(false);
-  const [showAssign, setShowAssign] = useState(false);
-  const [showCloseCase, setShowCloseCase] = useState(false);
-
-  // Add Evidence form state
-  const [evidenceType, setEvidenceType] = useState("Transaction Record");
-  const [evidenceSource, setEvidenceSource] = useState("");
-  const [addingEvidence, setAddingEvidence] = useState(false);
-  const [addEvidenceError, setAddEvidenceError] = useState<string | null>(null);
-  const [addEvidenceSuccess, setAddEvidenceSuccess] = useState(false);
-
-  const submitAddEvidence = async () => {
-    if (!inv?.id || !evidenceSource.trim()) return;
-    setAddingEvidence(true);
-    setAddEvidenceError(null);
-    setAddEvidenceSuccess(false);
-    try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/evidence`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: evidenceType, notes: evidenceSource.trim() }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `API ${res.status}`);
-      }
-      setAddEvidenceSuccess(true);
-      setEvidenceSource("");
-      setInv((prev: any) => prev ? { ...prev, evidence: (prev.evidence || 0) + 1 } : prev);
-      setTimeout(() => { setShowAddEvidence(false); setAddEvidenceSuccess(false); }, 1200);
-    } catch (err: any) {
-      setAddEvidenceError(err.message ?? "Failed to add evidence");
-    } finally {
-      setAddingEvidence(false);
-    }
-  };
-
-  // Add Entity form state
-  const [entitySearch, setEntitySearch] = useState("");
-  const [entityResults, setEntityResults] = useState<any[]>([]);
-  const [entitySearching, setEntitySearching] = useState(false);
-  const [addingEntityId, setAddingEntityId] = useState<string | null>(null);
-  const [addEntityError, setAddEntityError] = useState<string | null>(null);
-
-  const searchEntities = async (q: string) => {
-    if (!q.trim()) { setEntityResults([]); return; }
-    setEntitySearching(true);
-    try {
-      const res = await fetch(`http://localhost:4000/api/entities?search=${encodeURIComponent(q)}`);
-      if (!res.ok) throw new Error(`API ${res.status}`);
-      const data = await res.json();
-      setEntityResults((data.entities ?? data).slice(0, 8));
-    } catch {
-      setEntityResults([]);
-    } finally {
-      setEntitySearching(false);
-    }
-  };
-
-  const addEntityToInvestigation = async (entityId: string) => {
-    if (!inv?.id) return;
-    setAddingEntityId(entityId);
-    setAddEntityError(null);
-    try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/entities`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entityId }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `API ${res.status}`);
-      }
-      setInv((prev: any) => prev ? { ...prev, entities: (prev.entities || 0) + 1 } : prev);
-      setEntityResults(prev => prev.filter(e => e.id !== entityId));
-    } catch (err: any) {
-      setAddEntityError(err.message ?? "Failed to add entity");
-    } finally {
-      setAddingEntityId(null);
-    }
-  };
-
-  // Assign form state
-  const [assigneeName, setAssigneeName] = useState("");
-  const [assigning, setAssigning] = useState(false);
-  const [assignError, setAssignError] = useState<string | null>(null);
-
-  const submitAssign = async () => {
-    if (!inv?.id || !assigneeName.trim()) return;
-    setAssigning(true);
-    setAssignError(null);
-    try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignee: assigneeName.trim() }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `API ${res.status}`);
-      }
-      setInv((prev: any) => prev ? { ...prev, assignee: assigneeName.trim() } : prev);
-      setShowAssign(false);
-      setAssigneeName("");
-    } catch (err: any) {
-      setAssignError(err.message ?? "Failed to reassign");
-    } finally {
-      setAssigning(false);
-    }
-  };
-
-  // Close case state
-  const [closingCase, setClosingCase] = useState(false);
-  const [closeCaseError, setCloseCaseError] = useState<string | null>(null);
-
-  const submitCloseCase = async () => {
-    if (!inv?.id) return;
-    setClosingCase(true);
-    setCloseCaseError(null);
-    try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "CLOSED" }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `API ${res.status}`);
-      }
-      setInv((prev: any) => prev ? { ...prev, status: "CLOSED" } : prev);
-      setShowCloseCase(false);
-    } catch (err: any) {
-      setCloseCaseError(err.message ?? "Failed to close case");
-    } finally {
-      setClosingCase(false);
-    }
-  };
-
-  // Add Note quick-focus helper
-  const noteTextareaRef = { current: null as HTMLTextAreaElement | null };
-  const focusAddNote = () => {
-    const el = document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Add a note…"]');
-    if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.focus(); }
-  };
-
   // ─── AI Assessment review (Accept / Modify / Reject) ────────────────────
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -618,142 +463,26 @@ export function WorkspaceScreen({
     }
   })();
 
+  if (invLoading && !inv) {
+    return <div style={{ padding: "26px 28px" }}><p className="page-sub">Loading case…</p></div>;
+  }
+  if (invError && !inv) {
+    return (
+      <div style={{ padding: "26px 28px" }}>
+        <p className="page-sub" style={{ color: "var(--high-light)" }}>Couldn't reach the API ({invError}).</p>
+      </div>
+    );
+  }
+  if (!inv) {
+    return <div style={{ padding: "26px 28px" }}><p className="page-sub">No investigation to show.</p></div>;
+  }
+
   return (
     <div style={{ padding: "26px 28px" }}>
-      {/* ── Add Evidence Modal ─────────────────────────────────────────── */}
-      {showAddEvidence && (
-        <div style={{ position:"fixed",inset:0,zIndex:1000,background:"rgba(7,9,16,0.8)",backdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center" }}
-          onClick={e => { if (e.target===e.currentTarget) setShowAddEvidence(false); }}>
-          <div style={{ background:"var(--card,#0f1420)",border:"1px solid rgba(255,255,255,0.09)",borderRadius:14,padding:28,width:460,boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
-            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
-              <div className="display" style={{ fontSize:15,fontWeight:700,color:"var(--text-1)" }}>Add Evidence</div>
-              <button onClick={() => setShowAddEvidence(false)} style={{ background:"none",border:"none",color:"var(--text-3)",cursor:"pointer",fontSize:17 }}>✕</button>
-            </div>
-            <div style={{ display:"flex",flexDirection:"column",gap:13 }}>
-              <div>
-                <div style={{ fontSize:11,fontWeight:600,color:"var(--text-3)",marginBottom:6 }}>Evidence Type</div>
-                <select className="input" value={evidenceType} onChange={e => setEvidenceType(e.target.value)}
-                  style={{ backgroundImage:"url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235a6b84'/%3E%3C/svg%3E\")",backgroundRepeat:"no-repeat",backgroundPosition:"right 12px center",paddingRight:32 }}>
-                  {["Transaction Record","Wallet Data","Network Communication","Document","Screenshot","Blockchain Analysis","IP Log","Financial Report"].map(t => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <div style={{ fontSize:11,fontWeight:600,color:"var(--text-3)",marginBottom:6 }}>Source / Description</div>
-                <textarea className="input" style={{ minHeight:70,resize:"vertical",fontSize:12.5 }}
-                  placeholder="Describe the evidence source or paste a reference…"
-                  value={evidenceSource} onChange={e => setEvidenceSource(e.target.value)} />
-              </div>
-            </div>
-            {addEvidenceError && <div style={{ fontSize:11.5,color:"var(--critical-light)",marginTop:12 }}>{addEvidenceError}</div>}
-            {addEvidenceSuccess && <div style={{ fontSize:11.5,color:"#4ade80",marginTop:12 }}>✓ Evidence added successfully</div>}
-            <div style={{ display:"flex",gap:8,marginTop:18 }}>
-              <button className="btn btn-primary" style={{ flex:1,justifyContent:"center" }} onClick={submitAddEvidence} disabled={addingEvidence||!evidenceSource.trim()}>
-                {addingEvidence ? "Adding…" : "Add Evidence"}
-              </button>
-              <button className="btn btn-ghost" onClick={() => setShowAddEvidence(false)} disabled={addingEvidence}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Add Entity Modal ──────────────────────────────────────────── */}
-      {showAddEntity && (
-        <div style={{ position:"fixed",inset:0,zIndex:1000,background:"rgba(7,9,16,0.8)",backdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center" }}
-          onClick={e => { if (e.target===e.currentTarget) setShowAddEntity(false); }}>
-          <div style={{ background:"var(--card,#0f1420)",border:"1px solid rgba(255,255,255,0.09)",borderRadius:14,padding:28,width:480,boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
-            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
-              <div className="display" style={{ fontSize:15,fontWeight:700,color:"var(--text-1)" }}>Add Related Entity</div>
-              <button onClick={() => { setShowAddEntity(false); setEntitySearch(""); setEntityResults([]); }} style={{ background:"none",border:"none",color:"var(--text-3)",cursor:"pointer",fontSize:17 }}>✕</button>
-            </div>
-            <div style={{ marginBottom:13 }}>
-              <input className="input" placeholder="Search entities by alias or ID…" value={entitySearch}
-                onChange={e => { setEntitySearch(e.target.value); searchEntities(e.target.value); }} />
-            </div>
-            {entitySearching && <div style={{ fontSize:12,color:"var(--text-4)",marginBottom:10 }}>Searching…</div>}
-            {addEntityError && <div style={{ fontSize:11.5,color:"var(--critical-light)",marginBottom:10 }}>{addEntityError}</div>}
-            <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:260,overflowY:"auto" }}>
-              {entityResults.length === 0 && entitySearch.trim() && !entitySearching && (
-                <div style={{ fontSize:12,color:"var(--text-4)",padding:"12px 0",textAlign:"center" }}>No entities found</div>
-              )}
-              {entityResults.map(e => (
-                <div key={e.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:"rgba(255,255,255,0.03)",borderRadius:8 }}>
-                  <div style={{ width:28,height:28,borderRadius:"50%",background:"rgba(99,102,241,0.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--accent-hi)",flexShrink:0 }}>◈</div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:12.5,fontWeight:500,color:"var(--text-1)" }}>{e.alias}</div>
-                    <div className="mono-sm" style={{ color:"var(--text-4)" }}>{e.displayId ?? e.id}</div>
-                  </div>
-                  <button className="btn btn-ghost btn-sm" onClick={() => addEntityToInvestigation(e.id)} disabled={addingEntityId === e.id}>
-                    {addingEntityId === e.id ? "Adding…" : "+ Add"}
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop:16,textAlign:"right" }}>
-              <button className="btn btn-ghost" onClick={() => { setShowAddEntity(false); setEntitySearch(""); setEntityResults([]); }}>Done</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Assign Modal ──────────────────────────────────────────────── */}
-      {showAssign && (
-        <div style={{ position:"fixed",inset:0,zIndex:1000,background:"rgba(7,9,16,0.8)",backdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center" }}
-          onClick={e => { if (e.target===e.currentTarget) setShowAssign(false); }}>
-          <div style={{ background:"var(--card,#0f1420)",border:"1px solid rgba(255,255,255,0.09)",borderRadius:14,padding:28,width:400,boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
-            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18 }}>
-              <div className="display" style={{ fontSize:15,fontWeight:700,color:"var(--text-1)" }}>Reassign Investigation</div>
-              <button onClick={() => setShowAssign(false)} style={{ background:"none",border:"none",color:"var(--text-3)",cursor:"pointer",fontSize:17 }}>✕</button>
-            </div>
-            <div style={{ fontSize:12,color:"var(--text-3)",marginBottom:14 }}>
-              Currently assigned to <strong style={{ color:"var(--text-2)" }}>{inv.assignee}</strong>
-            </div>
-            <div style={{ marginBottom:13 }}>
-              <div style={{ fontSize:11,fontWeight:600,color:"var(--text-3)",marginBottom:6 }}>New Assignee</div>
-              <input className="input" placeholder="Investigator name…" value={assigneeName} onChange={e => setAssigneeName(e.target.value)} />
-            </div>
-            {["Investigator A","Investigator B","Investigator C","Senior Analyst"].map(name => (
-              <button key={name} onClick={() => setAssigneeName(name)}
-                style={{ display:"inline-block",margin:"0 6px 6px 0",padding:"4px 10px",fontSize:11.5,background:assigneeName===name?"rgba(99,102,241,0.15)":"rgba(255,255,255,0.04)",border:`1px solid ${assigneeName===name?"rgba(99,102,241,0.4)":"rgba(255,255,255,0.08)"}`,borderRadius:6,color:assigneeName===name?"var(--accent-hi)":"var(--text-3)",cursor:"pointer",transition:"all 0.13s" }}>
-                {name}
-              </button>
-            ))}
-            {assignError && <div style={{ fontSize:11.5,color:"var(--critical-light)",marginTop:10 }}>{assignError}</div>}
-            <div style={{ display:"flex",gap:8,marginTop:18 }}>
-              <button className="btn btn-primary" style={{ flex:1,justifyContent:"center" }} onClick={submitAssign} disabled={assigning||!assigneeName.trim()}>
-                {assigning ? "Assigning…" : "Reassign"}
-              </button>
-              <button className="btn btn-ghost" onClick={() => setShowAssign(false)} disabled={assigning}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Close Case Modal ──────────────────────────────────────────── */}
-      {showCloseCase && (
-        <div style={{ position:"fixed",inset:0,zIndex:1000,background:"rgba(7,9,16,0.8)",backdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center" }}
-          onClick={e => { if (e.target===e.currentTarget) setShowCloseCase(false); }}>
-          <div style={{ background:"var(--card,#0f1420)",border:"1px solid rgba(220,38,38,0.25)",borderRadius:14,padding:28,width:420,boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
-            <div style={{ fontSize:15,fontWeight:700,color:"var(--text-1)",marginBottom:8 }}>Close Case</div>
-            <div style={{ fontSize:12.5,color:"var(--text-3)",lineHeight:1.65,marginBottom:20 }}>
-              Mark <strong style={{ color:"var(--text-2)" }}>{inv.title}</strong> as closed. The case will be archived and marked inactive. You can re-open it later if needed.
-            </div>
-            {closeCaseError && <div style={{ fontSize:11.5,color:"var(--critical-light)",marginBottom:14 }}>{closeCaseError}</div>}
-            <div style={{ display:"flex",gap:8 }}>
-              <button className="btn btn-danger" style={{ flex:1,justifyContent:"center" }} onClick={submitCloseCase} disabled={closingCase}>
-                {closingCase ? "Closing…" : "Close Case"}
-              </button>
-              <button className="btn btn-ghost" onClick={() => setShowCloseCase(false)} disabled={closingCase}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {invLoading && <p className="page-sub" style={{ marginBottom: 12 }}>Loading case…</p>}
+      {invLoading && <p className="page-sub" style={{ marginBottom: 12 }}>Refreshing case…</p>}
       {invError && (
         <p className="page-sub" style={{ marginBottom: 12, color: "var(--high-light)" }}>
-          Couldn't reach the API ({invError}) — showing demo data.
+          Couldn't refresh from the API ({invError}) — showing the last loaded version of this case.
         </p>
       )}
 
@@ -767,20 +496,17 @@ export function WorkspaceScreen({
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
             <h1 className="section-head display" style={{ fontSize: 20 }}>{inv.title}</h1>
-            <span className={`badge ${inv.status === "CLOSED" ? "badge-low" : "badge-pending"}`}>{inv.status}</span>
-            <span className={`badge ${inv.priority === "CRITICAL" ? "badge-critical" : inv.priority === "HIGH" ? "badge-high" : inv.priority === "MEDIUM" ? "badge-medium" : "badge-low"}`}>{inv.priority}</span>
+            <span className="badge badge-pending">{inv.status}</span>
+            <span className={`badge ${inv.priority === "HIGH" ? "badge-high" : inv.priority === "MEDIUM" ? "badge-medium" : "badge-low"}`}>{inv.priority}</span>
           </div>
           <div style={{ fontSize: 12, color: "var(--text-3)" }}>Assigned to <span style={{ color: "var(--text-2)" }}>{inv.assignee}</span> · Updated {inv.updated}</div>
         </div>
-        <div style={{ display: "flex", gap: 7, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <button className="btn btn-ghost btn-sm" onClick={() => setShowAddEvidence(true)}>Add Evidence</button>
-          <button className="btn btn-ghost btn-sm" onClick={() => setShowAddEntity(true)}>Add Entity</button>
-          <button className="btn btn-ghost btn-sm" onClick={focusAddNote}>Add Note</button>
-          <button className="btn btn-ghost btn-sm" onClick={() => { setAssigneeName(inv.assignee ?? ""); setShowAssign(true); }}>Assign</button>
+        <div style={{ display: "flex", gap: 7 }}>
+          <button className="btn btn-ghost btn-sm">Add Evidence</button>
+          <button className="btn btn-ghost btn-sm">Add Note</button>
+          <button className="btn btn-ghost btn-sm">Assign</button>
           <button className="btn btn-primary btn-sm" onClick={() => navigate("reports")}>Generate Report</button>
-          <button className="btn btn-danger btn-sm" onClick={() => setShowCloseCase(true)} disabled={inv.status === "CLOSED"}>
-            {inv.status === "CLOSED" ? "Closed" : "Close Case"}
-          </button>
+          <button className="btn btn-danger btn-sm">Close Case</button>
         </div>
       </div>
 
@@ -796,25 +522,28 @@ export function WorkspaceScreen({
           <div className="card" style={{ padding: 20 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)" }}>Related Entities ({inv.entities})</div>
-              <div style={{ display:"flex",gap:6 }}>
-                <button className="btn btn-ghost btn-sm" onClick={() => setShowAddEntity(true)}>+ Add</button>
-                <button className="btn btn-ghost btn-sm" onClick={() => navigate("entities")}>View All</button>
-              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => navigate("entities")}>View All</button>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {(inv.relatedEntities?.length ? inv.relatedEntities : entities).slice(0, 4).map((e: any) => (
-                <div key={e.displayId ?? e.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 8, cursor: "pointer", transition: "background 0.13s" }}
-                  onMouseEnter={el => { (el.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.05)"; }}
-                  onMouseLeave={el => { (el.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.03)"; }}>
-                  <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(99,102,241,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "var(--accent-hi)", flexShrink: 0 }}>◈</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--text-1)" }}>{e.alias}</div>
-                    <div className="mono-sm" style={{ color: "var(--text-4)" }}>{e.displayId ?? e.id}</div>
-                  </div>
-                  <RiskBadge score={e.risk} />
-                  <button className="btn btn-ghost btn-sm" onClick={() => navigate("entity", e)}>View</button>
+              {(inv.relatedEntities ?? []).length === 0 ? (
+                <div style={{ textAlign: "center", padding: "18px 0", color: "var(--text-4)", fontSize: 12 }}>
+                  No entities linked to this investigation yet.
                 </div>
-              ))}
+              ) : (
+                (inv.relatedEntities ?? []).slice(0, 4).map((e: any) => (
+                  <div key={e.displayId ?? e.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 8, cursor: "pointer", transition: "background 0.13s" }}
+                    onMouseEnter={el => { (el.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.05)"; }}
+                    onMouseLeave={el => { (el.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.03)"; }}>
+                    <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(99,102,241,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "var(--accent-hi)", flexShrink: 0 }}>◈</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--text-1)" }}>{e.alias}</div>
+                      <div className="mono-sm" style={{ color: "var(--text-4)" }}>{e.displayId ?? e.id}</div>
+                    </div>
+                    <RiskBadge score={e.risk} />
+                    <button className="btn btn-ghost btn-sm" onClick={() => navigate("entity", { id: e.displayId ?? e.id, displayId: e.displayId ?? e.id })}>View</button>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
@@ -822,20 +551,23 @@ export function WorkspaceScreen({
           <div className="card" style={{ padding: 20 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)" }}>Evidence ({inv.evidence})</div>
-              <div style={{ display:"flex",gap:6 }}>
-                <button className="btn btn-ghost btn-sm" onClick={() => setShowAddEvidence(true)}>+ Add</button>
-                <button className="btn btn-ghost btn-sm" onClick={() => navigate("evidence")}>View All</button>
-              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => navigate("evidence")}>View All</button>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-              {evidenceRecords.slice(0, 3).map(ev => (
-                <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "9px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 7 }}>
-                  <span className="mono-sm" style={{ color: "var(--text-4)" }}>{ev.id}</span>
-                  <span style={{ flex: 1, fontSize: 12, color: "var(--text-2)" }}>{ev.type}</span>
-                  <span style={{ fontSize: 11, color: "var(--text-4)" }}>{ev.ts.split("·")[0].trim()}</span>
-                  <span className={`badge ${ev.status === "Verified" ? "badge-verified" : "badge-pending"}`}>{ev.status}</span>
+              {(inv.evidenceItems ?? []).length === 0 ? (
+                <div style={{ textAlign: "center", padding: "18px 0", color: "var(--text-4)", fontSize: 12 }}>
+                  No evidence recorded for this investigation yet.
                 </div>
-              ))}
+              ) : (
+                (inv.evidenceItems ?? []).slice(0, 3).map((ev: any) => (
+                  <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "9px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 7 }}>
+                    <span className="mono-sm" style={{ color: "var(--text-4)" }}>{ev.id}</span>
+                    <span style={{ flex: 1, fontSize: 12, color: "var(--text-2)" }}>{ev.type}</span>
+                    <span style={{ fontSize: 11, color: "var(--text-4)" }}>{ev.createdAt ? new Date(ev.createdAt).toLocaleDateString() : "—"}</span>
+                    <span className={`badge ${ev.status === "VERIFIED" ? "badge-verified" : "badge-pending"}`}>{ev.status}</span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
