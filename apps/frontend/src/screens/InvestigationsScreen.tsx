@@ -13,7 +13,7 @@ import {
   PulseIndicator, BarContrib, TimelineView,
 } from "../components/shared";
 import { getSocket, EVENT_META } from "../lib/socket";
-import { apiGet, apiDelete } from "../lib/api";
+import { apiGet, apiDelete, apiPost } from "../lib/api";
 
 const entities = mockEntities;
 
@@ -144,16 +144,13 @@ function NewInvestigationModal({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch("/api/investigations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: title.trim(), description: description.trim(), priority, status, assignee: assignee.trim() }),
+      const created = await apiPost("/api/investigations", {
+        title: title.trim(),
+        description: description.trim(),
+        priority,
+        status,
+        assignee: assignee.trim(),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `API ${res.status}`);
-      }
-      const created = await res.json();
       onCreated(created);
       onClose();
     } catch (err: any) {
