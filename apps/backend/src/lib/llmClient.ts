@@ -33,6 +33,25 @@ export type SupportedModel =
   | "gemini-flash-2.5"
   | "gemini-flash-3.1-lite";
 
+  type GroqResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+    };
+    finish_reason?: string | null;
+  }>;
+};
+
+type GeminiResponse = {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string;
+      }>;
+    };
+  }>;
+};
+
 export const MODEL_OPTIONS: { value: SupportedModel; label: string; group: string; note?: string }[] = [
   { value: "openai/gpt-oss-120b",     label: "GPT-OSS 120B",          group: "Grok",   note: "~500 t/s · best quality" },
   { value: "openai/gpt-oss-20b",      label: "GPT-OSS 20B",           group: "Grok",   note: "~1000 t/s · fastest" },
@@ -89,11 +108,11 @@ async function callGroq<T>(opts: {
     throw new LlmError(`Groq API returned ${res.status}: ${text.slice(0, 300)}`);
   }
 
-  const data: any = await res.json().catch(() => {
-    throw new LlmError("Groq response was not valid JSON at the HTTP level");
-  });
+const data = (await res.json().catch(() => {
+  throw new LlmError("Groq response was not valid JSON at the HTTP level");
+})) as GroqResponse;
 
-  const text: string | undefined = data?.choices?.[0]?.message?.content;
+const text = data?.choices?.[0]?.message?.content ?? undefined;
   if (!text) {
     const finishReason = data?.choices?.[0]?.finish_reason;
     throw new LlmError(
@@ -155,9 +174,9 @@ async function callGemini<T>(opts: {
     throw new LlmError(`Gemini API returned ${res.status}: ${text.slice(0, 300)}`);
   }
 
-  const data: any = await res.json().catch(() => {
-    throw new LlmError("Gemini response was not valid JSON at the HTTP level");
-  });
+const data = (await res.json().catch(() => {
+  throw new LlmError("Gemini response was not valid JSON at the HTTP level");
+})) as GeminiResponse;
 
   const text: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new LlmError("Gemini response had no text content");

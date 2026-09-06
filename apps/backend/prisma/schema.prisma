@@ -64,7 +64,6 @@ model Entity {
   investigationLinks InvestigationEntity[]
   events        RiskEvent[]
   walletTransactions WalletTransaction[]
-
   networkId String?
   network   Network? @relation(fields: [networkId], references: [id])
 }
@@ -306,46 +305,7 @@ model Wallet {
   lastSeen    DateTime @default(now())
   totalVolume String?  // "4.73 BTC-eq" — kept as display string for demo
   flagged     Boolean  @default(false)
-
-  transactions WalletTransaction[]
-}
-
-// A single observed on-chain movement tying a Wallet to the Entity it
-// transacted with (and, transitively, to that entity's Network). This is
-// the FK Wallet never had: before this model, "why is this wallet
-// relevant to investigation X" had no real answer — Wallet had no
-// entityId/networkId/investigationId at all. Relevance is now derived by
-// walking Wallet -> WalletTransaction -> Entity -> Network/Investigation,
-// the same "evidence flows upward, nothing re-guessed at a higher layer"
-// pattern used by vendorRisk.ts -> entityRisk.ts.
-enum TxnDirection {
-  INBOUND
-  OUTBOUND
-}
-
-model WalletTransaction {
-  id          String       @id @default(cuid())
-  walletId    String
-  wallet      Wallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
-
-  // Nullable because a transaction can be observed on-chain before entity
-  // resolution links it to a known identity — same "not calculable yet"
-  // philosophy as Entity.riskChange, rather than forcing a fabricated link.
-  entityId    String?
-  entity      Entity?      @relation(fields: [entityId], references: [id])
-
-  // Denormalized alongside entityId (rather than only derived by joining
-  // through entity.networkId) because a wallet's network relevance at the
-  // time of the transaction should stay fixed even if the entity is later
-  // reassigned to a different network — this is a historical record, not
-  // a live join.
-  networkId   String?
-  network     Network?     @relation(fields: [networkId], references: [id])
-
-  direction   TxnDirection
-  amountBtcEq Float        // numeric, not a display string, so amounts can be summed/compared
-  occurredAt  DateTime
-  createdAt   DateTime     @default(now())
+  walletTransactions WalletTransaction[]
 }
 
 model Listing {
@@ -444,4 +404,26 @@ model User {
   email     String   @unique
   role      Role     @default(INVESTIGATOR)
   createdAt DateTime @default(now())
+}
+
+enum TxnDirection {
+  INBOUND
+  OUTBOUND
+}
+
+model WalletTransaction {
+  id          String       @id @default(cuid())
+  walletId    String
+  wallet      Wallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  entityId    String?
+  entity      Entity?      @relation(fields: [entityId], references: [id])
+
+  networkId   String?
+  network     Network?     @relation(fields: [networkId], references: [id])
+
+  direction   TxnDirection
+  amountBtcEq Float
+  occurredAt  DateTime
+  createdAt   DateTime     @default(now())
 }

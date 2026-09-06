@@ -1,41 +1,15 @@
-import { useState, useEffect, useRef } from "react";
-import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
-import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
-} from "../data";
-import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
-  PulseIndicator, BarContrib, TimelineView,
-} from "../components/shared";
-import { getSocket, EVENT_META } from "../lib/socket";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+import { useState, useEffect } from "react";
+import { riskColorLight } from "../data";
+import { RiskBadge } from "../components/shared";
+import { apiGet } from "../lib/api";
 
 export function EntitiesScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
-  // Start with the demo array so the screen isn't blank while the fetch is
-  // in flight, then swap in real rows from Postgres once they arrive.
-  const [entities, setEntities] = useState<any[]>(mockEntities);
+  const [entities, setEntities] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string|null>(null);
 
   useEffect(() => {
-    fetch("http://localhost:4000/api/entities")
-      .then(res => {
-        if (!res.ok) throw new Error(`API returned ${res.status}`);
-        return res.json();
-      })
+    apiGet<any[]>("/api/entities")
       .then(data => { setEntities(data); setError(null); })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
@@ -54,7 +28,8 @@ export function EntitiesScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
         </div>
       </div>
       {loading && <p className="page-sub" style={{marginBottom:12}}>Loading entities…</p>}
-      {error && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({error}) — showing demo data instead.</p>}
+      {error && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({error}).</p>}
+      {!loading && !error && entities.length === 0 && <p className="page-sub" style={{marginBottom:12}}>No entities recorded yet.</p>}
       <div className="card">
         <table className="data-table">
           <thead>

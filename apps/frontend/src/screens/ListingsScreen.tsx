@@ -1,37 +1,16 @@
-import { useState, useEffect, useRef } from "react";
-import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
-import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
-} from "../data";
-import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
-  PulseIndicator, BarContrib, TimelineView,
-} from "../components/shared";
-import { getSocket, EVENT_META } from "../lib/socket";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+import { useState, useEffect } from "react";
+import { riskColorLight, riskBg, riskBorder } from "../data";
+import { RingScore, RiskBadge } from "../components/shared";
+import { apiGet } from "../lib/api";
 
 export function ListingsScreen() {
-  const [rows, setRows] = useState<any[]>(listings);
+  const [rows, setRows] = useState<any[]>([]);
   const [sel, setSel] = useState<any|null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string|null>(null);
 
   useEffect(() => {
-    fetch("http://localhost:4000/api/listings")
-      .then(res => { if (!res.ok) throw new Error(`API returned ${res.status}`); return res.json(); })
+    apiGet<any[]>("/api/listings")
       .then(data => { setRows(data); setError(null); })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
@@ -51,7 +30,7 @@ export function ListingsScreen() {
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
         <div>
           <h1 className="section-head">Listings Intelligence</h1>
-          <p className="page-sub">Flagged intelligence records — synthetic/demo data only. No purchase functionality.</p>
+          <p className="page-sub">Flagged intelligence records from tracked marketplaces. No purchase functionality.</p>
         </div>
         <div style={{display:"flex",gap:8}}>
           <input className="input" style={{width:200,padding:"7px 12px",fontSize:12}} placeholder="Filter records…"/>
@@ -59,7 +38,8 @@ export function ListingsScreen() {
         </div>
       </div>
       {loading && <p className="page-sub" style={{marginBottom:12}}>Loading listings…</p>}
-      {error && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({error}) — showing demo data instead.</p>}
+      {error && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({error}).</p>}
+      {!loading && !error && rows.length === 0 && <p className="page-sub" style={{marginBottom:12}}>No listings recorded yet.</p>}
       <div style={{display:"grid",gridTemplateColumns:sel?"1fr 360px":"1fr",gap:16,transition:"all 0.25s"}}>
         <div className="card">
           <table className="data-table">

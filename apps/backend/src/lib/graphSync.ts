@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+let graphSyncInFlight: Promise<{ nodeCount: number; edgeCount: number }> | null = null;
 
 // Deterministic hash -> angle, so each entity always lands in the same
 // visual position on the graph regardless of how many other entities

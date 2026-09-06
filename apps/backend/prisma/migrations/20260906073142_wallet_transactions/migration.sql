@@ -1,5 +1,9 @@
 -- CreateEnum
-CREATE TYPE "TxnDirection" AS ENUM ('INBOUND', 'OUTBOUND');
+DO $$ BEGIN
+  CREATE TYPE "TxnDirection" AS ENUM ('INBOUND', 'OUTBOUND');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 -- CreateTable
 CREATE TABLE "WalletTransaction" (

@@ -13,6 +13,7 @@ import {
   PulseIndicator, BarContrib, TimelineView,
 } from "../components/shared";
 import { getSocket, EVENT_META } from "../lib/socket";
+import { apiGet } from "../lib/api";
 
 const entities = mockEntities;
 
@@ -143,7 +144,7 @@ function NewInvestigationModal({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch("http://localhost:4000/api/investigations", {
+      const res = await fetch("/api/investigations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: title.trim(), description: description.trim(), priority, status, assignee: assignee.trim() }),
@@ -271,7 +272,7 @@ function ConfirmDeleteModal({
     setDeleting(true);
     setError(null);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/investigations/${inv.id}`, { method: "DELETE" });
       if (!res.ok && res.status !== 204) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `API ${res.status}`);
@@ -321,8 +322,7 @@ export function InvestigationsScreen({ navigate }: { navigate:(s:string,d?:any)=
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
 
   useEffect(() => {
-    fetch("http://localhost:4000/api/investigations")
-      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+    apiGet<any[]>("/api/investigations")
       .then(data => {
         const normalised = data.map((inv: any) => ({
           ...inv,

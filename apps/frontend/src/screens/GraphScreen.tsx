@@ -62,37 +62,36 @@ const [error, setError] = useState<string | null>(null);
 const [meta, setMeta] = useState<any | null>(null);
 
   useEffect(() => {
-    setSelected(investigationId ? null : "wallet-w1");
-    setSelectedEdgeKey(null);
-    setError(null);
-    setMeta(null);
+useEffect(() => {
+  setSelected(investigationId ? null : "wallet-w1");
+  setSelectedEdgeKey(null);
+  setError(null);
+  setMeta(null);
 
-    if (investigationId) {
-      setLoading(true);
-      fetch(`http://localhost:4000/api/investigations/${investigationId}/graph`)
-        .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
-        .then((data) => {
-          setMeta(data);
-          setLiveNodes((data.nodes ?? []).map(normalizeNode));
-          setLiveEdges((data.edges ?? []).map(normalizeEdge));
-        })
-        .catch((err) => {
-          // Explicit failure state — never silently show the global/mock
-          // graph in place of a requested investigation graph.
-          setError(err.message ?? "Unable to load investigation graph.");
-          setLiveNodes([]);
-          setLiveEdges([]);
-        })
-        .finally(() => setLoading(false));
-      return;
-    }
+  if (investigationId) {
+    setLoading(true);
 
-    // Global graph — unchanged behavior from before this change: on
-    // failure, silently keep whatever's already in state (mock data on
-    // first load), so the existing screen never regresses.
-    setLoading(false);
-    fetch("http://localhost:4000/api/graph")
-      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+    apiGet<any>(`/api/investigations/${investigationId}/graph`)
+      .then((data) => {
+        setMeta(data);
+        setLiveNodes((data.nodes ?? []).map(normalizeNode));
+        setLiveEdges((data.edges ?? []).map(normalizeEdge));
+      })
+      .catch((err) => {
+        setError(err.message ?? "Unable to load investigation graph.");
+        setLiveNodes([]);
+        setLiveEdges([]);
+      })
+      .finally(() => setLoading(false));
+
+    return;
+  }
+
+  setLoading(false);
+
+  apiGet<any>("/api/graph")
+    // keep your existing global-graph success/fallback handling
+}, [investigationId]);
       .then(({ nodes, edges }) => {
         if (nodes?.length) setLiveNodes(nodes.map(normalizeNode));
         if (edges?.length) setLiveEdges(edges.map(normalizeEdge));
@@ -175,9 +174,39 @@ const renderedEdges = isFocused
   ? connectedEdges
   : filteredEdges;
 
-  const getPos = (id: string) => liveNodes.find(n => n.id === id) || { x: 0, y: 0 };
+const getPos = (id: string) =>
+  liveNodes.find(n => n.id === id) || { x: 0, y: 0 };
 
-  const investigationScoped = !!investigationId;
+const investigationScoped = !!investigationId;
+
+if (loading) {
+  return (
+    <div style={{ padding: "26px 28px" }}>
+      <p className="page-sub">Loading network graph…</p>
+    </div>
+  );
+}
+
+if (error) {
+  return (
+    <div style={{ padding: "26px 28px" }}>
+      <p
+        className="page-sub"
+        style={{ color: "var(--high-light)" }}
+      >
+        Couldn't reach the API ({error}).
+      </p>
+    </div>
+  );
+}
+
+if (liveNodes.length === 0) {
+  return (
+    <div style={{ padding: "26px 28px" }}>
+      <p className="page-sub">No graph data available yet.</p>
+    </div>
+  );
+}
 
   return (
     <div style={{ display: "flex", height: "calc(100vh - 52px)", overflow: "hidden" }}>

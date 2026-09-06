@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import {
-  riskColorLight, riskLabel, caseTimeline,
+  riskColorLight, riskLabel,
   type Entity,
 } from "../data";
 import {
   RingScore, RiskBadge,
-  PulseIndicator, BarContrib, TimelineView,
+  PulseIndicator, BarContrib, TimelineView, type TimelineEvent,
 } from "../components/shared";
+import { apiGet } from "../lib/api";
 
 // Readable labels for the backend's CorrelationSignal enum — presentation
 // only, doesn't change the underlying signal identifiers.
@@ -25,10 +26,10 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
   const [tab, setTab] = useState("Overview");
   const tabs = ["Overview","Relationships","Activity","Evidence","Timeline"];
 
-  // The prop may come from a screen already wired to the API (real
-  // displayId) or from a screen still on demo data (mock "ENT-xxx" id) —
-  // either way we try the real endpoint and fall back to whatever was
-  // passed in if it can't be found.
+  // entityProp always carries real data now — passed in via navigate("entity", row)
+  // from whichever screen linked here (EntitiesScreen, SearchScreen, GraphScreen).
+  // It's used only as the pre-fetch placeholder so the header isn't blank
+  // while /api/entities/:displayId resolves.
   const displayId: string | undefined = (entityProp as any)?.displayId ?? entityProp?.id;
 
   const [live, setLive] = useState<any | null>(null);
@@ -38,26 +39,27 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
   useEffect(() => {
     if (!displayId) { setLoading(false); return; }
     setLoading(true);
-    fetch(`http://localhost:4000/api/entities/${encodeURIComponent(displayId)}`)
-      .then(res => { if (!res.ok) throw new Error(`API returned ${res.status}`); return res.json(); })
+    apiGet<any>(`/api/entities/${encodeURIComponent(displayId)}`)
       .then(data => { setLive(data); setError(null); })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   }, [displayId]);
 
-  // `source` is only used for cosmetic/demo fields (alias, firstSeen, mock
-  // identifiers) when the live fetch hasn't resolved — it never backs the
-  // risk/confidence numbers shown below.
+  // `source` prefers the live fetch once it resolves; entityProp (passed in
+  // via navigate("entity", row)) is itself always real data from whichever
+  // screen linked here (EntitiesScreen, SearchScreen, etc.) — used only as
+  // the pre-fetch placeholder so the header isn't blank while loading.
   const source: any = live ?? entityProp;
   const computed = live?.computed ?? null;
   const correlation = live?.correlation ?? null;
 
-  // Authoritative values: computed.* when we have live data (may be null —
-  // "not calculable" — and should be shown as such), otherwise the mock
-  // entity's numbers as a clearly-labeled fallback.
+  // Authoritative values come only from computed.* — never fall back to a
+  // stale/placeholder number here. If the live fetch hasn't resolved yet
+  // (or failed), risk/confidence show as "Not calculated" rather than an
+  // old value from whatever was passed in via navigate().
   const risk: number | null = live?.computed?.risk ?? null;
   const confidence: number | null = live?.computed?.confidence ?? null;
-  const riskChange: number | null = live ? null : null; // computed.riskChange is always null — never calculable per-entity
+  const riskChange: number | null = null; // computed.riskChange is always null — never calculable per-entity, see lib/entityRisk.ts
 
   const dash = (v: number | string | null | undefined) => (v === null || v === undefined || v === "" ? "—" : v);
 
@@ -72,20 +74,54 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
   useEffect(() => {
     if (tab !== "Relationships" || graphNode || relLoading) return;
     setRelLoading(true);
-    fetch("http://localhost:4000/api/graph")
-      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
+    apiGet<any>("/api/graph")
       .then(({ nodes }) => {
         const match = (nodes || []).find((n: any) => n.entityId === source.id);
         if (!match) throw new Error("No graph node linked to this entity yet");
-        return fetch(`http://localhost:4000/api/graph/${match.id}/expand`);
+        return apiGet<any>(`/api/graph/${match.id}/expand`);
       })
-      .then(res => { if (!res.ok) throw new Error(`API ${res.status}`); return res.json(); })
       .then(data => { setGraphNode(data); setRelError(null); })
       .catch(err => setRelError(err.message))
       .finally(() => setRelLoading(false));
   }, [tab, source?.id]);
 
+  // Timeline tab: an entity doesn't have its own timeline — timeline events
+  // belong to an Investigation. If this entity is linked to one (via
+  // investigationLinks, included in the /api/entities/:id response), pull
+  // that investigation's real timeline; otherwise show an honest empty state.
+  const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
+  const linkedInvestigationDisplayId: string | null =
+    live?.investigationLinks?.[0]?.investigation?.displayId ?? null;
+
+  useEffect(() => {
+    if (tab !== "Timeline" || !linkedInvestigationDisplayId) return;
+    setTimelineLoading(true);
+    apiGet<any>(`/api/investigations/${encodeURIComponent(linkedInvestigationDisplayId)}/timeline`)
+      .then(data => {
+        const TYPE_COLORS: Record<string, string> = {
+          DETECTION: "#6366f1", ALERT: "#ea580c", DISCOVERY: "#06b6d4",
+          ESCALATION: "#d97706", WARNING: "#dc2626", ACTION: "#8b5cf6", EVIDENCE: "#16a34a",
+        };
+        setTimelineEvents((data.timeline ?? []).map((ev: any) => ({
+          date: new Date(ev.occurredAt).toLocaleDateString(),
+          time: new Date(ev.occurredAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          label: ev.label ?? ev.type,
+          type: ev.type,
+          source: ev.source ?? "—",
+          agent: ev.agent ?? "System",
+          desc: ev.description ?? ev.label ?? "",
+          color: TYPE_COLORS[ev.type] ?? "#6366f1",
+        })));
+        setTimelineError(null);
+      })
+      .catch(err => setTimelineError(err.message))
+      .finally(() => setTimelineLoading(false));
+  }, [tab, linkedInvestigationDisplayId]);
+
   const typeColors: Record<string,string> = {ENTITY:"#6366f1",MARKET:"#8b5cf6",LISTING:"#d97706",WALLET:"#06b6d4",COMM:"#16a34a",TXN:"#ea580c"};
+
 
   // Normalise edgesFrom/edgesTo (each direction has the "other" node nested
   // differently) into one flat list: { other, label, direction }.
@@ -279,7 +315,20 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
         </div>
       )}
 
-      {tab==="Timeline" && <TimelineView events={caseTimeline}/>}
+      {tab==="Timeline" && (
+        linkedInvestigationDisplayId ? (
+          <>
+            {timelineLoading && <p className="page-sub">Loading timeline…</p>}
+            {timelineError && <p className="page-sub" style={{color:"var(--high-light)"}}>Couldn't reach the API ({timelineError}).</p>}
+            {!timelineLoading && !timelineError && <TimelineView events={timelineEvents}/>}
+          </>
+        ) : (
+          <div style={{textAlign:"center",padding:"60px 0",color:"var(--text-4)"}}>
+            <div style={{fontSize:32,marginBottom:12,opacity:0.3}}>◷</div>
+            <div>This entity isn't linked to an investigation yet, so there's no case timeline to show.</div>
+          </div>
+        )
+      )}
 
       {tab==="Relationships" && (
         <div className="card" style={{padding:20}}>

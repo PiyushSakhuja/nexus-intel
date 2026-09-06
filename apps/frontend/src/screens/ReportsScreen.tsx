@@ -1,27 +1,5 @@
-import { useState, useEffect, useRef } from "react";
-import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
-import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
-} from "../data";
-import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
-  PulseIndicator, BarContrib, TimelineView,
-} from "../components/shared";
-import { getSocket, EVENT_META } from "../lib/socket";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+import { useState, useEffect } from "react";
+import { apiGet, apiPost } from "../lib/api";
 
 export function ReportsScreen() {
   const sections = ["Executive Summary","Risk Assessment","Entity Analysis","Network Analysis","Evidence Summary","Investigation Timeline","AI Explanation","Audit Information"];
@@ -39,8 +17,7 @@ export function ReportsScreen() {
   const [generatedAt, setGeneratedAt] = useState<Date|null>(null);
 
   useEffect(() => {
-    fetch("http://localhost:4000/api/investigations")
-      .then(res => { if (!res.ok) throw new Error(); return res.json(); })
+    apiGet<any[]>("/api/investigations")
       .then(data => {
         const opts = data.map((i: any) => ({ id: i.displayId ?? i.id, displayId: i.displayId ?? i.id, title: i.title }));
         setInvOptions(opts);
@@ -54,12 +31,19 @@ export function ReportsScreen() {
     setGenerating(true);
     setGenError(null);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${selectedInvId}`);
-      if (!res.ok) throw new Error(`API ${res.status}`);
-      const data = await res.json();
+      const data = await apiGet<any>(`/api/investigations/${selectedInvId}`);
       setReportData(data);
       setGeneratedAt(new Date());
       setGenerated(true);
+      // Real audit record — this is what makes the "recorded in the
+      // platform audit log" line in the Audit Information section true
+      // rather than an unfulfilled claim. Fire-and-forget: a logging
+      // hiccup shouldn't block the report the investigator already has.
+      apiPost(`/api/investigations/${selectedInvId}/report-generated`, {
+        generatedBy: "Investigator A",
+        reportType,
+        classification,
+      }).catch(() => {});
     } catch (err: any) {
       setGenError(err.message ?? "Failed to generate report — could not reach the API.");
     } finally {

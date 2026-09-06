@@ -4,6 +4,8 @@ import { prisma } from "../lib/prisma.js";
 import { computeVendorRisk, type VendorRisk } from "../lib/vendorRisk.js";
 import { computeEntityRisk } from "../lib/entityRisk.js";
 import type { ListingInput } from "../lib/riskEngine.js";
+import { logAudit, ipFromRequest } from "../lib/audit.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const alertsRouter = Router();
 
@@ -148,13 +150,32 @@ alertsRouter.get("/", async (_req, res) => {
   res.json(calculatedAlerts);
 });
 
-alertsRouter.patch("/:id/status", async (req, res) => {
-  const { status } = req.body;
+// PATCH /api/alerts/:displayId/status — keyed by displayId ("ALT-089") for
+// consistency with every other resource in this API (investigations,
+// networks, entities, evidence all key their update/detail routes by
+// displayId, never the internal cuid).
+alertsRouter.patch("/:displayId/status", asyncHandler(async (req, res) => {
+  const { status, reviewedBy } = req.body as { status?: string; reviewedBy?: string };
+  const VALID = ["NEW", "REVIEWED", "RESOLVED"];
+  if (!status || !VALID.includes(status)) {
+    return res.status(400).json({ error: `status must be one of ${VALID.join(", ")}` });
+  }
+
+  const existing = await prisma.alert.findUnique({ where: { displayId: req.params.displayId } });
+  if (!existing) return res.status(404).json({ error: "Alert not found" });
 
   const alert = await prisma.alert.update({
-    where: { id: req.params.id },
-    data: { status },
+    where: { id: existing.id },
+    data: { status: status as any },
+  });
+
+  await logAudit({
+    user: reviewedBy?.trim() || "System",
+    action: `Alert marked ${status}`,
+    resource: alert.displayId,
+    type: "write",
+    ip: ipFromRequest(req),
   });
 
   res.json(alert);
-});
+}));

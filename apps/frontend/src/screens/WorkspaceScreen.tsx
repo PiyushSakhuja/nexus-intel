@@ -1,27 +1,6 @@
-import { useState, useEffect, useRef } from "react";
-import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
-import {
-  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
-  activityTimeline, riskDistribution, networkRiskEvolution,
-  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, entities as mockEntities, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
-  auditLog, flagContributions, networkSignals, caseTimeline,
-  type Entity, type Alert, type Investigation, type EvidenceRecord,
-} from "../data";
-import {
-  Sparkline, RingScore, RiskBadge, CustomTooltip, Section,
-  PulseIndicator, BarContrib, TimelineView,
-} from "../components/shared";
-import { getSocket, EVENT_META } from "../lib/socket";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
+import { useState, useEffect } from "react";
+import { RingScore, RiskBadge, PulseIndicator } from "../components/shared";
+import { apiGet, apiPost, apiPatch, apiDelete } from "../lib/api";
 
 // -- Model options (keep in sync with backend/src/lib/llmClient.ts) ----------
 // llama-3.3-70b-versatile and llama-3.1-8b-instant were decommissioned by
@@ -227,7 +206,7 @@ export function WorkspaceScreen({
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
 
   // ─── Real investigation data ────────────────────────────────────────────
-  const [inv, setInv] = useState<any>(investigations[0]);
+  const [inv, setInv] = useState<any>(null);
   const [invLoading, setInvLoading] = useState(true);
   const [invError, setInvError] = useState<string | null>(null);
 
@@ -239,16 +218,12 @@ export function WorkspaceScreen({
     const load = async () => {
       let targetId = displayId;
       if (!targetId) {
-        const listRes = await fetch("http://localhost:4000/api/investigations");
-        if (!listRes.ok) throw new Error(`API ${listRes.status}`);
-        const list = await listRes.json();
+        const list = await apiGet<any[]>("/api/investigations");
         targetId = list[0]?.displayId;
         if (!targetId) throw new Error("No investigations found");
       }
 
-      const res = await fetch(`http://localhost:4000/api/investigations/${targetId}`);
-      if (!res.ok) throw new Error(`API ${res.status}`);
-      const data = await res.json();
+      const data = await apiGet<any>(`/api/investigations/${targetId}`);
       if (cancelled) return;
 
       setInv({
@@ -262,6 +237,18 @@ export function WorkspaceScreen({
         updated: data.updatedAt ? new Date(data.updatedAt).toLocaleString() : data.updated ?? "",
         description: data.description ?? "",
         relatedEntities: (data.entities ?? []).map((ie: any) => ie.entity),
+        // Real evidence rows for THIS investigation, normalised to the shape
+        // the Evidence panel renders. Previously the panel ignored this
+        // entirely and always rendered the hardcoded `evidenceRecords` mock
+        // array regardless of which case was open.
+        evidenceItems: (data.evidence ?? []).map((ev: any) => ({
+          id: ev.displayId ?? ev.id,
+          type: ev.type,
+          hash: ev.hash,
+          status: ev.status,
+          uploadedBy: ev.uploadedBy,
+          createdAt: ev.createdAt,
+        })),
         addedEvidence: Array.isArray(data.evidence) ? data.evidence : [],
         // entityRiskContributors is now computed by GET /:displayId itself
         // (recomputed from current Entity/Listing data via the same
@@ -305,13 +292,7 @@ export function WorkspaceScreen({
     setAssessLoading(true);
     setAssessError(null);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/ai-assessment`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: selectedModel }),
-      });
-      if (!res.ok) throw new Error(`API ${res.status}`);
-      const data = await res.json();
+      const data = await apiPost(`/api/investigations/${inv.id}/ai-assessment`, { model: selectedModel });
       setAssessment(data);
       setShowModifyForm(false);
       setShowRejectForm(false);
@@ -328,13 +309,7 @@ export function WorkspaceScreen({
     setAddingNote(true);
     setAddNoteError(null);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/notes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: newNoteText.trim(), author: CURRENT_USER }),
-      });
-      if (!res.ok) throw new Error(`API ${res.status}`);
-      const created = await res.json();
+      const created = await apiPost(`/api/investigations/${inv.id}/notes`, { content: newNoteText.trim(), author: CURRENT_USER });
       setNotes((prev) => [created, ...prev]);
       setNewNoteText("");
     } catch (err: any) {
@@ -355,13 +330,7 @@ export function WorkspaceScreen({
     setSavingNoteId(noteId);
     setNoteActionError(null);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/notes/${noteId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: editNoteText.trim(), author: CURRENT_USER }),
-      });
-      if (!res.ok) throw new Error(`API ${res.status}`);
-      const updated = await res.json();
+      const updated = await apiPatch(`/api/investigations/${inv.id}/notes/${noteId}`, { content: editNoteText.trim(), author: CURRENT_USER });
       setNotes((prev) => prev.map((n) => (n.id === noteId ? updated : n)));
       setEditingNoteId(null);
     } catch (err: any) {
@@ -376,10 +345,7 @@ export function WorkspaceScreen({
     setDeletingNoteId(noteId);
     setNoteActionError(null);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/notes/${noteId}`, {
-        method: "DELETE",
-      });
-      if (!res.ok && res.status !== 204) throw new Error(`API ${res.status}`);
+      await apiDelete(`/api/investigations/${inv.id}/notes/${noteId}`);
       setNotes((prev) => prev.filter((n) => n.id !== noteId));
       setConfirmDeleteId(null);
     } catch (err: any) {
@@ -408,21 +374,20 @@ export function WorkspaceScreen({
     setAddEvidenceError(null);
     setAddEvidenceSuccess(false);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/evidence`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: evidenceType, notes: evidenceSource.trim() }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `API ${res.status}`);
-      }
-      const created = await res.json();
+      const created = await apiPost(`/api/investigations/${inv.id}/evidence`, { type: evidenceType, notes: evidenceSource.trim() });
       setAddEvidenceSuccess(true);
       setEvidenceSource("");
       setInv((prev: any) => prev ? {
         ...prev,
         addedEvidence: [...(prev.addedEvidence ?? []), created],
+        evidenceItems: [...(prev.evidenceItems ?? []), {
+          id: created.displayId ?? created.id,
+          type: created.type,
+          hash: created.hash,
+          status: created.status,
+          uploadedBy: created.uploadedBy,
+          createdAt: created.createdAt,
+        }],
       } : prev);
       setTimeout(() => { setShowAddEvidence(false); setAddEvidenceSuccess(false); }, 900);
     } catch (err: any) {
@@ -437,11 +402,11 @@ export function WorkspaceScreen({
     if (!inv?.id) return;
     setRemovingEvidenceId(evidenceId);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/evidence/${evidenceId}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 204) throw new Error(`API ${res.status}`);
+      await apiDelete(`/api/investigations/${inv.id}/evidence/${evidenceId}`);
       setInv((prev: any) => prev ? {
         ...prev,
         addedEvidence: (prev.addedEvidence ?? []).filter((e: any) => e.id !== evidenceId),
+        evidenceItems: (prev.evidenceItems ?? []).filter((e: any) => e.id !== evidenceId),
       } : prev);
     } catch { /* silent */ } finally {
       setRemovingEvidenceId(null);
@@ -453,8 +418,7 @@ export function WorkspaceScreen({
     if (!inv?.id) return;
     setRemovingEntityId(entityId);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/entities/${entityId}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 204) throw new Error(`API ${res.status}`);
+      await apiDelete(`/api/investigations/${inv.id}/entities/${entityId}`);
       setInv((prev: any) => prev ? {
         ...prev,
         relatedEntities: (prev.relatedEntities ?? []).filter((e: any) => e.id !== entityId),
@@ -475,9 +439,7 @@ export function WorkspaceScreen({
     if (!q.trim()) { setEntityResults([]); return; }
     setEntitySearching(true);
     try {
-      const res = await fetch(`http://localhost:4000/api/entities?search=${encodeURIComponent(q)}`);
-      if (!res.ok) throw new Error(`API ${res.status}`);
-      const data = await res.json();
+      const data = await apiGet<any>(`/api/entities?search=${encodeURIComponent(q)}`);
       setEntityResults((data.entities ?? data).slice(0, 8));
     } catch {
       setEntityResults([]);
@@ -491,16 +453,7 @@ export function WorkspaceScreen({
     setAddingEntityId(entityId);
     setAddEntityError(null);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/entities`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entityId }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `API ${res.status}`);
-      }
-      const link = await res.json();
+      await apiPost(`/api/investigations/${inv.id}/entities`, { entityId });
       // Add the entity to the displayed list
       const addedEntity = entityResults.find(e => e.id === entityId);
       if (addedEntity) {
@@ -528,15 +481,7 @@ export function WorkspaceScreen({
     setAssigning(true);
     setAssignError(null);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignee: assigneeName.trim() }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `API ${res.status}`);
-      }
+      await apiPatch(`/api/investigations/${inv.id}`, { assignee: assigneeName.trim() });
       setInv((prev: any) => prev ? { ...prev, assignee: assigneeName.trim() } : prev);
       setShowAssign(false);
       setAssigneeName("");
@@ -556,15 +501,7 @@ export function WorkspaceScreen({
     setClosingCase(true);
     setCloseCaseError(null);
     try {
-      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "CLOSED" }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `API ${res.status}`);
-      }
+      await apiPatch(`/api/investigations/${inv.id}`, { status: "CLOSED" });
       setInv((prev: any) => prev ? { ...prev, status: "CLOSED" } : prev);
       setShowCloseCase(false);
     } catch (err: any) {
@@ -575,7 +512,6 @@ export function WorkspaceScreen({
   };
 
   // Add Note quick-focus helper
-  const noteTextareaRef = { current: null as HTMLTextAreaElement | null };
   const focusAddNote = () => {
     const el = document.querySelector<HTMLTextAreaElement>('textarea[placeholder="Add a note…"]');
     if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.focus(); }
@@ -595,19 +531,10 @@ export function WorkspaceScreen({
     setReviewSubmitting(true);
     setReviewError(null);
     try {
-      const res = await fetch(
-        `http://localhost:4000/api/investigations/${inv.id}/ai-assessment/${assessment.id}/review`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, reviewedBy: inv.assignee, ...extra }),
-        }
+      const data = await apiPatch(
+        `/api/investigations/${inv.id}/ai-assessment/${assessment.id}/review`,
+        { action, reviewedBy: inv.assignee, ...extra }
       );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `API ${res.status}`);
-      }
-      const data = await res.json();
       setAssessment((prev: any) => ({ ...prev, ...data }));
       setShowModifyForm(false);
       setShowRejectForm(false);
@@ -694,6 +621,20 @@ export function WorkspaceScreen({
     }
   })();
 
+  if (invLoading && !inv) {
+    return <div style={{ padding: "26px 28px" }}><p className="page-sub">Loading case…</p></div>;
+  }
+  if (invError && !inv) {
+    return (
+      <div style={{ padding: "26px 28px" }}>
+        <p className="page-sub" style={{ color: "var(--high-light)" }}>Couldn't reach the API ({invError}).</p>
+      </div>
+    );
+  }
+  if (!inv) {
+    return <div style={{ padding: "26px 28px" }}><p className="page-sub">No investigation to show.</p></div>;
+  }
+
   return (
     <div style={{ padding: "26px 28px" }}>
       {/* ── Assign Modal ──────────────────────────────────────────────── */}
@@ -749,10 +690,10 @@ export function WorkspaceScreen({
         </div>
       )}
 
-      {invLoading && <p className="page-sub" style={{ marginBottom: 12 }}>Loading case…</p>}
+      {invLoading && <p className="page-sub" style={{ marginBottom: 12 }}>Refreshing case…</p>}
       {invError && (
         <p className="page-sub" style={{ marginBottom: 12, color: "var(--high-light)" }}>
-          Couldn't reach the API ({invError}) — showing demo data.
+          Couldn't refresh from the API ({invError}) — showing the last loaded version of this case.
         </p>
       )}
 
@@ -897,7 +838,7 @@ export function WorkspaceScreen({
                       <div className="mono-sm" style={{ color: "var(--text-4)" }}>{e.displayId ?? e.id}</div>
                     </div>
                     <RiskBadge score={e.risk} />
-                    <button className="btn btn-ghost btn-sm" onClick={() => navigate("entity", e)}>View</button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => navigate("entity", { id: e.displayId ?? e.id, displayId: e.displayId ?? e.id })}>View</button>
                     <button
                       className="icon-btn danger"
                       style={{ fontSize: 10, padding: "2px 6px", flexShrink: 0 }}
@@ -917,7 +858,7 @@ export function WorkspaceScreen({
           <div className="card" style={{ padding: 20, position: "relative" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)" }}>
-                Evidence {(inv.addedEvidence ?? []).length > 0 && <span style={{ color: "var(--text-4)", fontWeight: 400 }}>({(inv.addedEvidence ?? []).length})</span>}
+                Evidence {(inv.evidenceItems ?? []).length > 0 && <span style={{ color: "var(--text-4)", fontWeight: 400 }}>({(inv.evidenceItems ?? []).length})</span>}
               </div>
               <div style={{ display: "flex", gap: 6, position: "relative" }}>
                 <div style={{ position: "relative" }}>
@@ -1016,7 +957,7 @@ export function WorkspaceScreen({
             </div>
 
             {/* Evidence list — real data only, no hardcoded fallback */}
-            {(inv.addedEvidence ?? []).length === 0 ? (
+            {(inv.evidenceItems ?? []).length === 0 ? (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "22px 0", gap: 8 }}>
                 <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.04)", border: "1px dashed rgba(255,255,255,0.1)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, color: "var(--text-4)" }}>⊟</div>
                 <div style={{ fontSize: 12.5, color: "var(--text-4)" }}>No evidence added yet</div>
@@ -1024,10 +965,11 @@ export function WorkspaceScreen({
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                {(inv.addedEvidence ?? []).map((ev: any) => (
+                {(inv.evidenceItems ?? []).map((ev: any) => (
                   <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "9px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 7 }}>
-                    <span className="mono-sm" style={{ color: "var(--text-4)", flexShrink: 0 }}>{ev.displayId ?? ev.id}</span>
+                    <span className="mono-sm" style={{ color: "var(--text-4)", flexShrink: 0 }}>{ev.id}</span>
                     <span style={{ flex: 1, fontSize: 12, color: "var(--text-2)" }}>{ev.type}</span>
+                    <span style={{ fontSize: 11, color: "var(--text-4)" }}>{ev.createdAt ? new Date(ev.createdAt).toLocaleDateString() : "—"}</span>
                     <span className={`badge ${ev.status === "VERIFIED" || ev.status === "Verified" ? "badge-verified" : "badge-pending"}`}>{ev.status}</span>
                     <button
                       className="icon-btn danger"
