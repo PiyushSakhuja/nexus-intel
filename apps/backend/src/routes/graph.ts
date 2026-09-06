@@ -3,8 +3,32 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 
 import { syncGraphFromEntities } from "../lib/graphSync.js";
+import { computeVendorRisk, type VendorRisk } from "../lib/vendorRisk.js";
+import { computeEntityRisk } from "../lib/entityRisk.js";
+import { computeNetworkRiskAggregate } from "../lib/networkRisk.js";
+import type { ListingInput } from "../lib/riskEngine.js";
 
 export const graphRouter = Router();
+
+// Same computation as routes/networks.ts's (unexported) buildVendorRiskMap
+// — duplicated here rather than importing from that route file so this
+// graph-specific route doesn't reach into a teammate-owned route file.
+// Same pure inputs (real Listing rows) and same lib function; no new model.
+async function buildVendorRiskMap(): Promise<Map<string, VendorRisk>> {
+  const listings = await prisma.listing.findMany();
+  const inputs: ListingInput[] = listings.map((l) => ({
+    id: l.id,
+    category: l.category,
+    title: l.title,
+    priceUsd: l.priceUsd,
+    marketplace: l.marketplace,
+    vendorAlias: l.vendorAlias,
+    shipsFrom: l.shipsFrom,
+    firstSeen: l.firstSeen,
+    lastSeen: l.lastSeen,
+  }));
+  return computeVendorRisk(inputs);
+}
 
 // GET /api/graph — full node + edge set for the Network Graph screen
 //
@@ -41,6 +65,7 @@ graphRouter.get("/", async (_req, res) => {
         select: {
           id: true,
           displayId: true,
+          networkId: true,
         },
       })
     : [];
@@ -49,15 +74,61 @@ graphRouter.get("/", async (_req, res) => {
     entities.map((e) => [e.id, e.displayId])
   );
 
-  const enrichedNodes = nodes.map((n) =>
-    n.entityId
-      ? {
-          ...n,
-          displayId:
-            displayIdByEntityId.get(n.entityId) ?? null,
-        }
-      : n
+  // Entity Risk vs. Network Risk (GraphScreen's top toggle): previously
+  // both modes rendered the exact same thing because the frontend had
+  // nothing but each node's own Entity.risk to draw from, no matter which
+  // mode was selected. This attaches a SECOND, genuinely different, real
+  // signal — the aggregate computed risk of the criminal Network an entity
+  // belongs to (the same computeNetworkRiskAggregate value shown on
+  // GET /api/networks / NetworkRiskScreen) — as `networkRisk`, alongside
+  // the existing per-entity `risk`. An entity with no networkId (not part
+  // of a tracked network) simply gets networkRisk: null — never a
+  // fabricated score. Non-entity nodes (market/listing/wallet/txn) don't
+  // belong to a Network at all, so they're left without a networkRisk
+  // field entirely, same as before.
+  const networkIds = [
+    ...new Set(
+      entities
+        .map((e) => e.networkId)
+        .filter((id): id is string => !!id)
+    ),
+  ];
+
+  const networkRiskByNetworkId = new Map<string, number | null>();
+  if (networkIds.length) {
+    const [networks, vendorRiskByAlias] = await Promise.all([
+      prisma.network.findMany({
+        where: { id: { in: networkIds } },
+        include: { entities: { select: { alias: true } } },
+      }),
+      buildVendorRiskMap(),
+    ]);
+
+    for (const network of networks) {
+      const entityRisks = network.entities.map((e) =>
+        computeEntityRisk(e.alias, vendorRiskByAlias)
+      );
+      const aggregate = computeNetworkRiskAggregate(entityRisks);
+      networkRiskByNetworkId.set(network.id, aggregate.computedBaselineRisk);
+    }
+  }
+
+  const networkIdByEntityId = new Map(
+    entities.map((e) => [e.id, e.networkId])
   );
+
+  const enrichedNodes = nodes.map((n) => {
+    if (!n.entityId) return n;
+    const entityNetworkId = networkIdByEntityId.get(n.entityId) ?? null;
+    const networkRisk = entityNetworkId
+      ? networkRiskByNetworkId.get(entityNetworkId) ?? null
+      : null;
+    return {
+      ...n,
+      displayId: displayIdByEntityId.get(n.entityId) ?? null,
+      networkRisk,
+    };
+  });
 
   res.json({
     nodes: enrichedNodes,
