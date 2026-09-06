@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { getIo } from "../sockets/io.js";
 import { generateInvestigationAssessment } from "../lib/investigationAssessment.js";
 import { DEFAULT_MODEL, MODEL_OPTIONS, type SupportedModel } from "../lib/llmClient.js";
+import { buildInvestigationDetailExtras } from "../lib/investigationDetail.js";
 
 export const investigationsRouter = Router();
 
@@ -145,20 +146,61 @@ investigationsRouter.delete("/:displayId/entities/:entityId", async (req, res) =
   res.status(204).send();
 });
 
+// GET /api/investigations/:displayId — the single Investigation Detail
+// API: everything the Investigation Workspace needs for one case, in one
+// response. Entities/evidence/timeline/aiAssessments/notes/network were
+// already real (see lib/investigationDetail.ts header for why); `wallets`,
+// `listings`, `risk`, and `riskFactors` are added below via
+// buildInvestigationDetailExtras rather than left for the frontend to
+// assemble from separate /api/wallets, /api/listings, etc. calls.
 investigationsRouter.get("/:displayId", async (req, res) => {
   const inv = await prisma.investigation.findUnique({
     where: { displayId: req.params.displayId },
     include: {
-      entities: { include: { entity: true } },
+      entities: {
+        include: {
+          entity: {
+            include: {
+              network: true,
+              alertLinks: { include: { alert: true } },
+            },
+          },
+        },
+      },
       evidence: true,
       timeline: { orderBy: { occurredAt: "asc" } },
       aiAssessments: { orderBy: { createdAt: "desc" } },
       notes: { orderBy: { createdAt: "desc" }, include: { revisions: { orderBy: { supersededAt: "desc" } } } },
-      network: true,
+      network: { include: { riskPoints: { orderBy: { recordedAt: "asc" } }, alerts: true } },
     },
   });
   if (!inv) return res.status(404).json({ error: "Investigation not found" });
-  res.json(inv);
+
+  const linkedEntities = inv.entities.map((ie) => ie.entity);
+  const extras = await buildInvestigationDetailExtras({
+    investigation: inv,
+    network: inv.network,
+    linkedEntities,
+    evidence: inv.evidence.map((e) => ({ status: e.status })),
+    timeline: inv.timeline.map((t) => ({ type: t.type })),
+  });
+
+  // `entities` below intentionally REPLACES the raw InvestigationEntity
+  // join-row shape (`{ entityId, investigationId, entity: {...} }`) with
+  // the flattened, relationship-annotated view from buildInvestigationDetailExtras.
+  // Existing callers of this route that only read entity fields directly
+  // (none currently do — investigations.ts is the only place this shape is
+  // built) are unaffected; anything reading `.entity.<field>` would need
+  // updating to read the flattened fields instead.
+  res.json({
+    ...inv,
+    entities: extras.entities,
+    wallets: extras.wallets,
+    listings: extras.listings,
+    risk: extras.risk,
+    riskFactors: extras.riskFactors,
+    riskFactorsSource: extras.riskFactorsSource,
+  });
 });
 
 // POST /api/investigations/:displayId/ai-assessment
