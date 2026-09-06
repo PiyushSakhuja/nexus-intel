@@ -236,7 +236,7 @@ export function WorkspaceScreen({
         assignee: data.assignee ?? "Unassigned",
         updated: data.updatedAt ? new Date(data.updatedAt).toLocaleString() : data.updated ?? "",
         description: data.description ?? "",
-        relatedEntities: (data.entities ?? []).map((ie: any) => ie.entity),
+        relatedEntities: data.entities ?? [],
         // Real evidence rows for THIS investigation, normalised to the shape
         // the Evidence panel renders. Previously the panel ignored this
         // entirely and always rendered the hardcoded `evidenceRecords` mock

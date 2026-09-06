@@ -16,6 +16,7 @@ import {
 import {
   RingScore, RiskBadge,
 } from "../components/shared";
+import { apiGet } from "@/lib/api";
 
 const DEFAULT_VIEWBOX = { x: 0, y: 0, w: 900, h: 620 };
 const MIN_VIEWBOX_SIZE = 220; // most zoomed-in
@@ -61,9 +62,8 @@ const [loading, setLoading] = useState(!!investigationId);
 const [error, setError] = useState<string | null>(null);
 const [meta, setMeta] = useState<any | null>(null);
 
-  useEffect(() => {
 useEffect(() => {
-  setSelected(investigationId ? null : "wallet-w1");
+  setSelected(null);
   setSelectedEdgeKey(null);
   setError(null);
   setMeta(null);
@@ -90,14 +90,14 @@ useEffect(() => {
   setLoading(false);
 
   apiGet<any>("/api/graph")
-    // keep your existing global-graph success/fallback handling
+  .then(({ nodes, edges }) => {
+    if (nodes?.length) setLiveNodes(nodes.map(normalizeNode));
+    if (edges?.length) setLiveEdges(edges.map(normalizeEdge));
+  })
+  .catch(() => {
+    // Keep existing/mock data on failure.
+  });
 }, [investigationId]);
-      .then(({ nodes, edges }) => {
-        if (nodes?.length) setLiveNodes(nodes.map(normalizeNode));
-        if (edges?.length) setLiveEdges(edges.map(normalizeEdge));
-      })
-      .catch(() => { /* keep existing/mock data on failure — unchanged */ });
-  }, [investigationId]);
 
   // ─── Zoom / pan (Phase 6) ────────────────────────────────────────────────
   const [viewBox, setViewBox] = useState(DEFAULT_VIEWBOX);
@@ -530,8 +530,6 @@ if (liveNodes.length === 0) {
 </svg>
 )}
 </div>
-</div>
-  );
 
       {/* Right panel — node details */}
       {selNode && (
@@ -728,6 +726,9 @@ if (liveNodes.length === 0) {
           </div>
         </div>
       )}
+      </div>
+  );
+}
 
 function RelRow({ label, node, onClick }: { label: string; node: any; onClick: () => void }) {
   if (!node) return null;
@@ -768,5 +769,4 @@ function normalizeEdge(e: any) {
 
 function edgeKey(edge: any, index: number) {
   return edge.id ?? `${edge.from}-${edge.to}-${index}`;
-}
 }

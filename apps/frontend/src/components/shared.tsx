@@ -3,8 +3,8 @@ import { riskColor, riskColorLight, riskLabel, caseTimeline } from "../data";
 // Small shared presentational components used across multiple screens.
 
 export function Sparkline({ data, color }: { data: number[]; color: string }) {
-  const max = Math.max(...data);
-  const pts = data.map((v, i) => `${(i / (data.length - 1)) * 56},${18 - (v / max) * 16}`).join(" ");
+  const max = Math.max(...data, 1);
+const pts = data.map((v, i) => `${(i / (data.length - 1)) * 56},${18 - (v / max) * 16}`).join(" ");
   return (
     <svg width={56} height={18} viewBox="0 0 56 18" style={{ overflow: "visible" }}>
       <defs>
