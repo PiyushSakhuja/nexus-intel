@@ -3336,6 +3336,73 @@ async function main() {
 
   console.log('Networks created: 5')
 
+  // ─── Network risk history (Risk Evolution chart) ────────────────────────────
+  // Networks above have a final risk/change/status but, until now, zero
+  // NetworkRiskPoint rows — so GET /:displayId/trajectory returned an empty
+  // riskPoints array and the Network Risk Analysis screen's "Risk Evolution"
+  // chart showed "No historical risk data available yet." on a fresh seed.
+  // This backfills ~1 month (30 days) of history per network, ending at its
+  // current persisted `risk` (recorded at `lastActivity`, matching the "Last
+  // Activity" shown in the UI) with the final jump sized to roughly match
+  // `change`, so it lines up with the "changed +N pts on the last pipeline
+  // event" banner text. Guarded by a count check so re-running the seed
+  // script is idempotent and never duplicates points (and won't clobber real
+  // trajectory data produced by /api/simulate/event or /recalculate).
+  type HistoricalRiskPoint = { daysAgo: number; score: number }
+
+  async function seedNetworkRiskHistory(
+    network: { id: string; lastActivity: Date },
+    points: HistoricalRiskPoint[]
+  ) {
+    const existing = await prisma.networkRiskPoint.count({ where: { networkId: network.id } })
+    if (existing > 0) return // already has trajectory data — don't duplicate
+
+    await prisma.networkRiskPoint.createMany({
+      data: points.map(({ daysAgo, score }) => ({
+        networkId: network.id,
+        label: daysAgo === 0 ? `Recalculated: ${network.lastActivity.toISOString()}` : `Day -${daysAgo}`,
+        score,
+        recordedAt:
+          daysAgo === 0
+            ? network.lastActivity
+            : new Date(network.lastActivity.getTime() - daysAgo * 24 * 60 * 60 * 1000),
+      })),
+    })
+  }
+
+  await seedNetworkRiskHistory(netN042, [
+    { daysAgo: 30, score: 24 }, { daysAgo: 26, score: 26 }, { daysAgo: 22, score: 25 },
+    { daysAgo: 18, score: 28 }, { daysAgo: 14, score: 30 }, { daysAgo: 10, score: 32 },
+    { daysAgo: 7, score: 33 }, { daysAgo: 4, score: 32 }, { daysAgo: 2, score: 33 },
+    { daysAgo: 1, score: 32 }, { daysAgo: 0, score: 91 },
+  ])
+  await seedNetworkRiskHistory(netN018, [
+    { daysAgo: 30, score: 40 }, { daysAgo: 26, score: 42 }, { daysAgo: 22, score: 41 },
+    { daysAgo: 18, score: 43 }, { daysAgo: 14, score: 45 }, { daysAgo: 10, score: 44 },
+    { daysAgo: 7, score: 46 }, { daysAgo: 4, score: 47 }, { daysAgo: 2, score: 47 },
+    { daysAgo: 1, score: 47 }, { daysAgo: 0, score: 78 },
+  ])
+  await seedNetworkRiskHistory(netN067, [
+    { daysAgo: 30, score: 38 }, { daysAgo: 26, score: 40 }, { daysAgo: 22, score: 39 },
+    { daysAgo: 18, score: 41 }, { daysAgo: 14, score: 43 }, { daysAgo: 10, score: 44 },
+    { daysAgo: 7, score: 46 }, { daysAgo: 4, score: 47 }, { daysAgo: 2, score: 48 },
+    { daysAgo: 1, score: 48 }, { daysAgo: 0, score: 72 },
+  ])
+  await seedNetworkRiskHistory(netN031, [
+    { daysAgo: 30, score: 36 }, { daysAgo: 26, score: 38 }, { daysAgo: 22, score: 37 },
+    { daysAgo: 18, score: 39 }, { daysAgo: 14, score: 41 }, { daysAgo: 10, score: 42 },
+    { daysAgo: 7, score: 44 }, { daysAgo: 4, score: 45 }, { daysAgo: 2, score: 46 },
+    { daysAgo: 1, score: 46 }, { daysAgo: 0, score: 65 },
+  ])
+  await seedNetworkRiskHistory(netN009, [
+    { daysAgo: 30, score: 34 }, { daysAgo: 26, score: 36 }, { daysAgo: 22, score: 35 },
+    { daysAgo: 18, score: 37 }, { daysAgo: 14, score: 39 }, { daysAgo: 10, score: 40 },
+    { daysAgo: 7, score: 41 }, { daysAgo: 4, score: 42 }, { daysAgo: 2, score: 43 },
+    { daysAgo: 1, score: 44 }, { daysAgo: 0, score: 58 },
+  ])
+
+  console.log('Network risk history seeded: ~1 month per network')
+
   // ─── Network graph (GraphNode / GraphEdge) ───────────────────────────────────
   // Previously unseeded, so GET /api/graph returned { nodes: [], edges: [] }.
   // Because the frontend only overwrites its mock nodes/edges when the
