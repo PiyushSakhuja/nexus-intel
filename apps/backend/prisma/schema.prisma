@@ -280,6 +280,7 @@ model EvidenceRecord {
   id              String         @id @default(cuid())
   displayId       String         @unique // "EV-1029"
   type            String
+  notes           String?        // investigator-entered context/source description
   hash            String         // SHA-256, actually computed
   uploadedBy      String
   status          EvidenceStatus @default(PENDING)

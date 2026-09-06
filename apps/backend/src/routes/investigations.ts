@@ -1,4 +1,5 @@
 import { Router } from "express";
+import crypto from "node:crypto";
 import { prisma } from "../lib/prisma.js";
 import { getIo } from "../sockets/io.js";
 import { generateInvestigationAssessment } from "../lib/investigationAssessment.js";
@@ -320,18 +321,38 @@ investigationsRouter.post(
     });
 
     const displayId = `EV-${String(count + 1).padStart(4, "0")}`;
+    const trimmedNotes = notes?.trim() || null;
+
+    // Real SHA-256 over whatever the investigator actually gave us (type +
+    // notes + a timestamp so two otherwise-identical quick-adds don't hash
+    // identically), matching the real hashing already done in
+    // routes/misc.ts's POST /api/evidence — this route previously faked it
+    // with Math.random(), which meant its "hash" carried zero integrity
+    // meaning despite the chain-of-custody UI implying otherwise.
+    const hash = crypto
+      .createHash("sha256")
+      .update(`${type.trim()}|${trimmedNotes ?? ""}|${Date.now()}`)
+      .digest("hex")
+      .toUpperCase();
 
     const evidence = await prisma.evidenceRecord.create({
       data: {
         displayId,
         investigationId: inv.id,
         type: type.trim(),
+        notes: trimmedNotes,
         uploadedBy: "Investigator A",
         status: "PENDING",
-        hash: `sha256-${Math.random()
-          .toString(36)
-          .slice(2, 18)}`,
+        hash,
       },
+    });
+
+    await logAudit({
+      user: "Investigator A",
+      action: "Added Evidence",
+      resource: evidence.displayId,
+      type: "write",
+      ip: ipFromRequest(req),
     });
 
     res.status(201).json(evidence);

@@ -1,8 +1,16 @@
 import { PrismaClient, SourceAccess } from '@prisma/client'
+import crypto from 'node:crypto'
 import { scoreListings, signalsToDisplayStrings } from '../src/lib/riskEngine.js'
 import { syncGraphFromEntities } from '../src/lib/graphSync.js'
 
 const prisma = new PrismaClient()
+
+// Real SHA-256 over a description of the evidence content, so newly-seeded
+// evidence rows below carry an actually-computed hash (like the live
+// POST /api/evidence endpoint produces) instead of a hand-typed hex string.
+function evidenceHash(content: string): string {
+  return crypto.createHash('sha256').update(content).digest('hex').toUpperCase()
+}
 
 async function main() {
   console.log('Seeding Nexus Intel database…')
@@ -3666,7 +3674,118 @@ async function main() {
     },
   })
 
-  console.log('Evidence records created: 6')
+  // Additional evidence for the active/under-review investigations that
+  // previously had none at all (INV-2026-031, INV-2026-028) so every
+  // non-closed case has at least some supporting evidence, plus one more
+  // for INV-2026-039.
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1033" }, update: {},
+    create: {
+      id: "evd_1033g7h8i9j0k1l2m3n4o5",
+      displayId: "EV-1033",
+      type: "Wallet Transaction Log",
+      notes: "Outbound cluster transfers from Cluster-C1 flagged by the abnormal-outflow trigger — DUTCHBULK-linked addresses.",
+      hash: evidenceHash("EV-1033 Wallet Transaction Log Cluster-C1 DUTCHBULK outflow"),
+      uploadedBy: "Investigator A",
+      status: "PENDING",
+      sourceId: sourceBlockchain.id,
+      investigationId: inv031.id,
+      createdAt: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000),
+    },
+  })
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1032" }, update: {},
+    create: {
+      id: "evd_1032h8i9j0k1l2m3n4o5p6",
+      displayId: "EV-1032",
+      type: "Intelligence Record",
+      notes: "Cross-reference note tying the DUTCHBULK marketplace alias to the wallet cluster under review.",
+      hash: evidenceHash("EV-1032 Intelligence Record DUTCHBULK Cluster-C1"),
+      uploadedBy: "Investigator A",
+      status: "VERIFIED",
+      sourceId: sourceAlpha.id,
+      investigationId: inv031.id,
+      createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+    },
+  })
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1031" }, update: {},
+    create: {
+      id: "evd_1031i9j0k1l2m3n4o5p6q7",
+      displayId: "EV-1031",
+      type: "Listing Capture",
+      notes: "Snapshot of montana193's active listings taken during routine monitoring.",
+      hash: evidenceHash("EV-1031 Listing Capture montana193 monitoring"),
+      uploadedBy: "Investigator C",
+      status: "VERIFIED",
+      sourceId: sourceAlpha.id,
+      investigationId: inv028.id,
+      createdAt: new Date(Date.now() - 18 * 24 * 60 * 60 * 1000),
+    },
+  })
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1030" }, update: {},
+    create: {
+      id: "evd_1030j0k1l2m3n4o5p6q7r8",
+      displayId: "EV-1030",
+      type: "Communication Record",
+      notes: "Forum-post correlation between cerberus and a known Source Beta handle.",
+      hash: evidenceHash("EV-1030 Communication Record cerberus Source Beta"),
+      uploadedBy: "Investigator C",
+      status: "PENDING",
+      sourceId: sourceBeta.id,
+      investigationId: inv028.id,
+      createdAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000),
+    },
+  })
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1035" }, update: {},
+    create: {
+      id: "evd_1035l2m3n4o5p6q7r8s9t0",
+      displayId: "EV-1035",
+      type: "Network Analysis Report",
+      notes: "Shared-infrastructure link between montana193 and cerberus flagged during routine monitoring.",
+      hash: evidenceHash("EV-1035 Network Analysis Report montana193 cerberus monitoring"),
+      uploadedBy: "System",
+      status: "VERIFIED",
+      sourceId: sourceSystem.id,
+      investigationId: inv028.id,
+      createdAt: new Date(Date.now() - 12 * 24 * 60 * 60 * 1000),
+    },
+  })
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1034" }, update: {},
+    create: {
+      id: "evd_1034k1l2m3n4o5p6q7r8s9",
+      displayId: "EV-1034",
+      type: "Wallet Transaction Log",
+      notes: "Supplementary wallet activity for the RepAAA/OnePiece resolution cluster.",
+      hash: evidenceHash("EV-1034 Wallet Transaction Log RepAAA OnePiece cluster"),
+      uploadedBy: "Investigator B",
+      status: "VERIFIED",
+      sourceId: sourceBlockchain.id,
+      investigationId: inv039.id,
+      createdAt: new Date(Date.now() - 11 * 24 * 60 * 60 * 1000),
+    },
+  })
+
+  await prisma.evidenceRecord.upsert({
+    where: { displayId: "EV-1036" }, update: {},
+    create: {
+      id: "evd_1036m3n4o5p6q7r8s9t0u1",
+      displayId: "EV-1036",
+      type: "Listing Capture",
+      notes: "Archived DUTCHBULK listing referenced in the cluster's outflow timeline.",
+      hash: evidenceHash("EV-1036 Listing Capture DUTCHBULK cluster timeline"),
+      uploadedBy: "Investigator A",
+      status: "PENDING",
+      sourceId: sourceAlpha.id,
+      investigationId: inv031.id,
+      createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+    },
+  })
+
+  console.log('Evidence records created: 13')
 
   // ─── Audit log ──────────────────────────────────────────────────────────────
 

@@ -29,6 +29,7 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
           ts: ev.createdAt ? new Date(ev.createdAt).toLocaleString() : ev.ts ?? "",
           hash: ev.hash ?? "—",
           caseRef: ev.investigation?.displayId ?? ev.investigationId ?? ev.caseRef ?? "—",
+          notes: ev.notes ?? null,
           by: ev.uploadedBy ?? ev.by ?? "System",
           status: ev.status ? ev.status.charAt(0) + ev.status.slice(1).toLowerCase() : "Pending",
         }));
@@ -44,11 +45,15 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
 
     // Populate the modal's dropdowns once, up front.
     apiGet<any[]>("/api/investigations")
-      .then(data => setInvOptions(data.map((i: any) => ({
-        id: i.id,
-        displayId: i.displayId ?? i.id,
-        title: i.title,
-      }))))
+      .then(data => setInvOptions(
+        data
+          .filter((i: any) => i.status !== "CLOSED")
+          .map((i: any) => ({
+            id: i.id,
+            displayId: i.displayId ?? i.id,
+            title: i.title,
+          }))
+      ))
       .catch(() => { });
     apiGet<any[]>("/api/sources")
       .then(data => {
@@ -208,6 +213,13 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
               <div style={{ fontSize: 10, color: "var(--text-4)", marginBottom: 4 }}>SHA-256 Hash</div>
               <div className="hash-block">{sel.hash}</div>
             </div>
+
+            {sel.notes && (
+              <div style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                <div style={{ fontSize: 10, color: "var(--text-4)", marginBottom: 4 }}>Notes</div>
+                <div style={{ fontSize: 12, color: "var(--text-2)", whiteSpace: "pre-wrap" }}>{sel.notes}</div>
+              </div>
+            )}
 
             <div style={{ marginTop: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>

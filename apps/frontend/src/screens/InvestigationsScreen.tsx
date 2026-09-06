@@ -13,7 +13,7 @@ import {
   PulseIndicator, BarContrib, TimelineView,
 } from "../components/shared";
 import { getSocket, EVENT_META } from "../lib/socket";
-import { apiGet } from "../lib/api";
+import { apiGet, apiDelete } from "../lib/api";
 
 const entities = mockEntities;
 
@@ -272,11 +272,7 @@ function ConfirmDeleteModal({
     setDeleting(true);
     setError(null);
     try {
-      const res = await fetch(`/api/investigations/${inv.id}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 204) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `API ${res.status}`);
-      }
+      await apiDelete(`/api/investigations/${inv.id}`);
       onDeleted(inv.id);
       onClose();
     } catch (err: any) {
