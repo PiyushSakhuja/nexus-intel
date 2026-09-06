@@ -386,6 +386,7 @@ export async function buildInvestigationDetailExtras(input: AssembleInput): Prom
     // entityRisk.ts's note on why riskChange isn't recomputable).
     const computed = computeEntityRisk(entity.alias, vendorRiskByAlias);
     return {
+      id: entity.id,
       displayId: entity.displayId,
       alias: entity.alias,
       risk: computed.risk ?? entity.risk,

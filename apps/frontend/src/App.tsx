@@ -34,6 +34,7 @@ export default function App() {
   const [workspaceDisplayId, setWorkspaceDisplayId] = useState<string | null>(null);
   const [networkDisplayId, setNetworkDisplayId] = useState<string | null>(null);
   const [graphInvestigationId, setGraphInvestigationId] = useState<string | null>(null);
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
   const navigate = useCallback((s: string, data?: any) => {
     if (s === "entity" && data) {
       setEntityData(data);
@@ -48,6 +49,13 @@ export default function App() {
       if (displayId) {
         setWorkspaceDisplayId(displayId);
       }
+    }
+
+    if (s === "evidence" && data?.selectedId) {
+      setSelectedEvidenceId(data.selectedId);
+    } else if (s !== "evidence") {
+      // Reset selection when navigating away from evidence
+      setSelectedEvidenceId(null);
     }
 
     if (s === "graph") {
@@ -105,7 +113,7 @@ export default function App() {
           />
         );
       case "timeline": return <TimelineScreen navigate={navigate} />;
-      case "evidence": return <EvidenceScreen />;
+      case "evidence": return <EvidenceScreen selectedId={selectedEvidenceId} />;
       case "analytics": return <AnalyticsScreen />;
       case "reports": return <ReportsScreen />;
       case "audit": return <AuditScreen />;

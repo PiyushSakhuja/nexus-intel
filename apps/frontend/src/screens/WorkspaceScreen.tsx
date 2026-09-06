@@ -236,13 +236,15 @@ export function WorkspaceScreen({
         assignee: data.assignee ?? "Unassigned",
         updated: data.updatedAt ? new Date(data.updatedAt).toLocaleString() : data.updated ?? "",
         description: data.description ?? "",
-        relatedEntities: data.entities ?? [],
+        relatedEntities: (data.entities ?? []).map((e: any) => ({
+          ...e,
+          _rawId: e.id, // prisma UUID — needed for DELETE /entities/:entityId
+        })),
         // Real evidence rows for THIS investigation, normalised to the shape
-        // the Evidence panel renders. Previously the panel ignored this
-        // entirely and always rendered the hardcoded `evidenceRecords` mock
-        // array regardless of which case was open.
+        // the Evidence panel renders.
         evidenceItems: (data.evidence ?? []).map((ev: any) => ({
-          id: ev.displayId ?? ev.id,
+          _rawId: ev.id,             // prisma UUID — needed for DELETE
+          id: ev.displayId ?? ev.id, // display string shown in UI
           type: ev.type,
           hash: ev.hash,
           status: ev.status,
@@ -381,6 +383,7 @@ export function WorkspaceScreen({
         ...prev,
         addedEvidence: [...(prev.addedEvidence ?? []), created],
         evidenceItems: [...(prev.evidenceItems ?? []), {
+          _rawId: created.id,
           id: created.displayId ?? created.id,
           type: created.type,
           hash: created.hash,
@@ -398,15 +401,15 @@ export function WorkspaceScreen({
   };
 
   const [removingEvidenceId, setRemovingEvidenceId] = useState<string | null>(null);
-  const removeEvidence = async (evidenceId: string) => {
+  const removeEvidence = async (rawId: string) => {
     if (!inv?.id) return;
-    setRemovingEvidenceId(evidenceId);
+    setRemovingEvidenceId(rawId);
     try {
-      await apiDelete(`/api/investigations/${inv.id}/evidence/${evidenceId}`);
+      await apiDelete(`/api/investigations/${inv.id}/evidence/${rawId}`);
       setInv((prev: any) => prev ? {
         ...prev,
-        addedEvidence: (prev.addedEvidence ?? []).filter((e: any) => e.id !== evidenceId),
-        evidenceItems: (prev.evidenceItems ?? []).filter((e: any) => e.id !== evidenceId),
+        addedEvidence: (prev.addedEvidence ?? []).filter((e: any) => e.id !== rawId),
+        evidenceItems: (prev.evidenceItems ?? []).filter((e: any) => e._rawId !== rawId),
       } : prev);
     } catch { /* silent */ } finally {
       setRemovingEvidenceId(null);
@@ -414,14 +417,14 @@ export function WorkspaceScreen({
   };
 
   const [removingEntityId, setRemovingEntityId] = useState<string | null>(null);
-  const removeEntity = async (entityId: string) => {
+  const removeEntity = async (rawId: string) => {
     if (!inv?.id) return;
-    setRemovingEntityId(entityId);
+    setRemovingEntityId(rawId);
     try {
-      await apiDelete(`/api/investigations/${inv.id}/entities/${entityId}`);
+      await apiDelete(`/api/investigations/${inv.id}/entities/${rawId}`);
       setInv((prev: any) => prev ? {
         ...prev,
-        relatedEntities: (prev.relatedEntities ?? []).filter((e: any) => e.id !== entityId),
+        relatedEntities: (prev.relatedEntities ?? []).filter((e: any) => e._rawId !== rawId),
       } : prev);
     } catch { /* silent */ } finally {
       setRemovingEntityId(null);
@@ -842,8 +845,8 @@ export function WorkspaceScreen({
                     <button
                       className="icon-btn danger"
                       style={{ fontSize: 10, padding: "2px 6px", flexShrink: 0 }}
-                      onClick={() => removeEntity(e.id)}
-                      disabled={removingEntityId === e.id}
+                      onClick={() => removeEntity(e._rawId ?? e.id)}
+                      disabled={removingEntityId === (e._rawId ?? e.id)}
                       title="Remove entity"
                     >
                       {removingEntityId === e.id ? "…" : "✕"}
@@ -966,19 +969,27 @@ export function WorkspaceScreen({
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                 {(inv.evidenceItems ?? []).map((ev: any) => (
-                  <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "9px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 7 }}>
-                    <span className="mono-sm" style={{ color: "var(--text-4)", flexShrink: 0 }}>{ev.id}</span>
-                    <span style={{ flex: 1, fontSize: 12, color: "var(--text-2)" }}>{ev.type}</span>
-                    <span style={{ fontSize: 11, color: "var(--text-4)" }}>{ev.createdAt ? new Date(ev.createdAt).toLocaleDateString() : "—"}</span>
-                    <span className={`badge ${ev.status === "VERIFIED" || ev.status === "Verified" ? "badge-verified" : "badge-pending"}`}>{ev.status}</span>
+                  <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 7 }}>
+                    <span className="mono-sm" style={{ color: "var(--accent-hi)", flexShrink: 0, minWidth: 76 }}>{ev.id}</span>
+                    <span style={{ flex: 1, fontSize: 12, color: "var(--text-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.type}</span>
+                    <span style={{ fontSize: 11, color: "var(--text-4)", flexShrink: 0 }}>{ev.createdAt ? new Date(ev.createdAt).toLocaleDateString() : "—"}</span>
+                    <span className={`badge ${ev.status === "VERIFIED" || ev.status === "Verified" ? "badge-verified" : "badge-pending"}`} style={{ flexShrink: 0 }}>{ev.status}</span>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ flexShrink: 0, fontSize: 10.5, padding: "3px 8px" }}
+                      onClick={() => navigate("evidence", { selectedId: ev.id })}
+                      title="Open in Evidence Repository"
+                    >
+                      View
+                    </button>
                     <button
                       className="icon-btn danger"
                       style={{ fontSize: 10, padding: "2px 6px", flexShrink: 0 }}
-                      onClick={() => removeEvidence(ev.id)}
-                      disabled={removingEvidenceId === ev.id}
+                      onClick={() => removeEvidence(ev._rawId ?? ev.id)}
+                      disabled={removingEvidenceId === (ev._rawId ?? ev.id)}
                       title="Remove evidence"
                     >
-                      {removingEvidenceId === ev.id ? "…" : "✕"}
+                      {removingEvidenceId === (ev._rawId ?? ev.id) ? "…" : "✕"}
                     </button>
                   </div>
                 ))}

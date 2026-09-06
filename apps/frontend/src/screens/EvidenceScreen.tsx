@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { apiGet, apiPost, apiPatch } from "../lib/api";
 
-export function EvidenceScreen() {
+export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
   const [evidenceRows, setEvidenceRows] = useState<any[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(true);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);
@@ -57,6 +57,20 @@ export function EvidenceScreen() {
       })
       .catch(() => { });
   }, []);
+
+  // Auto-select evidence when navigated from workspace with a selectedId
+  useEffect(() => {
+    if (!selectedId || evidenceRows.length === 0) return;
+    const match = evidenceRows.find(ev => ev.id === selectedId);
+    if (match) {
+      setSel(match);
+      // Scroll the row into view after a short paint delay
+      setTimeout(() => {
+        const el = document.querySelector(`[data-ev-id="${selectedId}"]`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 80);
+    }
+  }, [selectedId, evidenceRows]);
 
   // Real chain-of-custody: pulls the audit log entries whose `resource`
   // matches this evidence record's displayId, instead of three fabricated
@@ -141,7 +155,7 @@ export function EvidenceScreen() {
             <thead><tr><th>ID</th><th>Type</th><th>Source</th><th>Timestamp</th><th>SHA-256 (partial)</th><th>Case</th><th>By</th><th>Status</th></tr></thead>
             <tbody>
               {evidenceRows.map(ev => (
-                <tr key={ev.id} className={sel?.id === ev.id ? "selected" : ""} onClick={() => setSel(ev.id === sel?.id ? null : ev)}>
+                <tr key={ev.id} data-ev-id={ev.id} className={sel?.id === ev.id ? "selected" : ""} onClick={() => setSel(ev.id === sel?.id ? null : ev)}>
                   <td><span className="mono" style={{ color: "var(--accent-hi)", fontSize: 12 }}>{ev.id}</span></td>
                   <td>{ev.type}</td>
                   <td>{ev.source}</td>
@@ -198,11 +212,30 @@ export function EvidenceScreen() {
             <div style={{ marginTop: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                 <div style={{ fontSize: 11, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: "0.07em" }}>Chain of Custody</div>
-                {sel.status !== "Verified" && (
-                  <button className="btn btn-ghost btn-sm" disabled={verifying} onClick={() => verifyEvidence("VERIFIED")}>
-                    {verifying ? "Verifying…" : "Mark Verified"}
-                  </button>
-                )}
+                <div style={{ display: "flex", gap: 6 }}>
+                  {sel.status !== "Verified" && (
+                    <button className="btn btn-primary btn-sm" disabled={verifying} onClick={() => verifyEvidence("VERIFIED")} style={{ fontSize: 11 }}>
+                      {verifying ? "…" : "✓ Mark Verified"}
+                    </button>
+                  )}
+                  {sel.status !== "Pending" && sel.status !== "Rejected" && (
+                    <button className="btn btn-ghost btn-sm" disabled={verifying} onClick={() => verifyEvidence("REJECTED")} style={{ fontSize: 11 }}>
+                      {verifying ? "…" : "✕ Reject"}
+                    </button>
+                  )}
+                  {sel.status !== "Pending" && (
+                    <button className="btn btn-ghost btn-sm" disabled={verifying} onClick={async () => {
+                      setVerifying(true);
+                      try {
+                        await apiPatch(`/api/evidence/${encodeURIComponent(sel.id)}/status`, { status: "PENDING", reviewedBy: form.uploadedBy || "Investigator A" });
+                        setSel((s: any) => s ? { ...s, status: "Pending" } : s);
+                        fetchEvidence();
+                      } finally { setVerifying(false); }
+                    }} style={{ fontSize: 11 }}>
+                      {verifying ? "…" : "◷ Mark Pending"}
+                    </button>
+                  )}
+                </div>
               </div>
               {custodyLoading && <div style={{ fontSize: 11.5, color: "var(--text-4)" }}>Loading custody trail…</div>}
               {!custodyLoading && custody.length === 0 && (
