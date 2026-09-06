@@ -3336,6 +3336,55 @@ async function main() {
 
   console.log('Networks created: 5')
 
+  // ─── Wallet transactions ─────────────────────────────────────────────────────
+  // The FK Wallet never had: before this, "why is WALLET-W1 relevant to
+  // investigation X" had no real answer anywhere in the schema (Wallet had
+  // no entityId/networkId at all). Each row here is a real, specific
+  // observed movement between a wallet and an entity, on the network that
+  // entity belonged to at the time — this is what
+  // lib/investigationDetail.ts walks to answer "why is this wallet
+  // relevant" instead of hardcoding the answer in the frontend.
+  //
+  // Deliberately NOT limited to INV-2026-042's entities: WALLET-W1/W2 are
+  // Cluster-C1 (see Wallet seed above), and INV-2026-031 ("Wallet Cluster
+  // Analysis") already describes "Blockchain cluster Cluster-C1 analysis
+  // following abnormal outflow detection" against entity DUTCHBULK (N-067)
+  // — so those wallets also transacting with DUTCHBULK fills in a
+  // connection that narrative already implied, rather than inventing one.
+  // WALLET-W3/W4 transact with entities on N-031, entirely unrelated to
+  // INV-2026-042, as a control: if the WalletTransaction rows for W1/W2
+  // were removed, those wallets should stop appearing under INV-2026-042
+  // entirely rather than falling back to a hardcoded relevance string.
+
+  const walletTxnSeeds = [
+    // WALLET-W1 (Cluster-C1) <-> INV-2026-042 entities on N-042
+    { id: "wtx_001a1b2c3d4e5f6g7h8i9j0", walletId: "wal_w1a9k4n7t2vqmxz6ryc0h5bd", entityId: "ent_1xrdh2up5txj6u7usgd8psmf", networkId: netN042.id, direction: "OUTBOUND", amountBtcEq: 1.2, occurredAt: new Date("2026-08-13T09:14:00+00:00") }, // -> Hackyboy
+    { id: "wtx_002b2c3d4e5f6g7h8i9j0k1", walletId: "wal_w1a9k4n7t2vqmxz6ryc0h5bd", entityId: "ent_1xrdh2up5txj6u7usgd8psmf", networkId: netN042.id, direction: "INBOUND",  amountBtcEq: 0.8, occurredAt: new Date("2026-08-14T11:02:00+00:00") }, // <- Hackyboy
+    { id: "wtx_003c3d4e5f6g7h8i9j0k1l2", walletId: "wal_w1a9k4n7t2vqmxz6ryc0h5bd", entityId: "ent_8tobfmrwoq0xap29a8cm4yt8", networkId: netN042.id, direction: "OUTBOUND", amountBtcEq: 0.65, occurredAt: new Date("2026-08-15T08:41:00+00:00") }, // -> goldendrugs
+    // WALLET-W2 (Cluster-C1) <-> INV-2026-042 entity HappyEyes on N-042
+    { id: "wtx_004d4e5f6g7h8i9j0k1l2m3", walletId: "wal_w2c7m3x9q1vryhz5tbk0n8f4", entityId: "ent_lvwg0jr1ws23e7ytwpsgoupu", networkId: netN042.id, direction: "OUTBOUND", amountBtcEq: 0.9, occurredAt: new Date("2026-08-12T14:27:00+00:00") }, // -> HappyEyes
+    { id: "wtx_005e5f6g7h8i9j0k1l2m3n4", walletId: "wal_w2c7m3x9q1vryhz5tbk0n8f4", entityId: "ent_lvwg0jr1ws23e7ytwpsgoupu", networkId: netN042.id, direction: "INBOUND",  amountBtcEq: 0.4, occurredAt: new Date("2026-08-15T19:53:00+00:00") }, // <- HappyEyes
+    // WALLET-W1/W2 (Cluster-C1) <-> DUTCHBULK on N-067 — the "abnormal
+    // outflow" INV-2026-031 already narrates for this cluster.
+    { id: "wtx_006f6g7h8i9j0k1l2m3n4o5", walletId: "wal_w1a9k4n7t2vqmxz6ryc0h5bd", entityId: "ent_2fazmtzljxq1u25vcqrzr1yi", networkId: netN067.id, direction: "OUTBOUND", amountBtcEq: 2.1, occurredAt: new Date("2026-08-05T06:10:00+00:00") }, // -> DUTCHBULK
+    { id: "wtx_007g7h8i9j0k1l2m3n4o5p6", walletId: "wal_w2c7m3x9q1vryhz5tbk0n8f4", entityId: "ent_2fazmtzljxq1u25vcqrzr1yi", networkId: netN067.id, direction: "OUTBOUND", amountBtcEq: 1.5, occurredAt: new Date("2026-08-06T07:35:00+00:00") }, // -> DUTCHBULK
+    // WALLET-W3/W4 (Cluster-C2) <-> N-031 entities — unrelated to
+    // INV-2026-042, kept as a control so relevance stays entity/network
+    // specific rather than "every wallet shows up everywhere".
+    { id: "wtx_008h8i9j0k1l2m3n4o5p6q7", walletId: "wal_w3f2b8h5k1tyrvz9mqxc4n7d", entityId: "ent_71kf7ep57waaq4s375mblf7d", networkId: netN031.id, direction: "OUTBOUND", amountBtcEq: 0.3, occurredAt: new Date("2026-08-09T12:00:00+00:00") }, // -> montana193
+    { id: "wtx_009i9j0k1l2m3n4o5p6q7r8", walletId: "wal_w4n6q0v3x8tzrymb1hc5k9f", entityId: "ent_bus6n2achj04ej8dqgy1m7al", networkId: netN031.id, direction: "INBOUND",  amountBtcEq: 0.2, occurredAt: new Date("2026-08-10T15:44:00+00:00") }, // <- cerberus
+  ] as const
+
+  for (const txn of walletTxnSeeds) {
+    await prisma.walletTransaction.upsert({
+      where: { id: txn.id },
+      update: {},
+      create: txn,
+    })
+  }
+
+  console.log(`Wallet transactions created: ${walletTxnSeeds.length}`)
+
   // ─── Network graph (GraphNode / GraphEdge) ───────────────────────────────────
   // Generated via the same shared function the live API uses on every
   // GET /api/graph request (see src/lib/graphSync.ts) — so seed-time and
