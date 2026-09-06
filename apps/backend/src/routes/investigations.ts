@@ -219,7 +219,7 @@ investigationsRouter.post("/:displayId/ai-assessment", async (req, res) => {
     data: {
       investigationId: inv.id,
       riskScore: result.riskScore,
-      signals: result.signals,
+      signals: result.signals as any,
       explanation: result.explanation,
       recommendedNext: JSON.stringify(result.recommendedNext),
     },
