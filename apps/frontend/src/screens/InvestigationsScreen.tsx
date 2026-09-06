@@ -301,7 +301,7 @@ function ConfirmDeleteModal({
   );
 }
 
-export function InvestigationsScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
+export function InvestigationsScreen({ navigate, autoOpenNew }: { navigate:(s:string,d?:any)=>void; autoOpenNew?: boolean }) {
   const statusColor: Record<string,string> = {
     "UNDER INVESTIGATION":"var(--medium-light)",
     "UNDER REVIEW":"var(--accent-hi)",
@@ -313,6 +313,12 @@ export function InvestigationsScreen({ navigate }: { navigate:(s:string,d?:any)=
   const [invError, setInvError] = useState<string|null>(null);
   const [showNewModal, setShowNewModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
+
+  // Auto-open the "New Investigation" modal when navigated here with that intent
+  // (e.g. clicking "+ New Investigation" from the Overview screen).
+  useEffect(() => {
+    if (autoOpenNew) setShowNewModal(true);
+  }, [autoOpenNew]);
 
   useEffect(() => {
     apiGet<any[]>("/api/investigations")

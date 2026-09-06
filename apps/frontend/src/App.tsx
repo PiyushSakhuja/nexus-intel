@@ -35,6 +35,7 @@ export default function App() {
   const [networkDisplayId, setNetworkDisplayId] = useState<string | null>(null);
   const [graphInvestigationId, setGraphInvestigationId] = useState<string | null>(null);
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
+  const [autoOpenNewInvestigation, setAutoOpenNewInvestigation] = useState(false);
   const navigate = useCallback((s: string, data?: any) => {
     if (s === "entity" && data) {
       setEntityData(data);
@@ -73,6 +74,12 @@ export default function App() {
       setGraphInvestigationId(investigationId);
     }
 
+    if (s === "investigations") {
+      // Only auto-open the "New Investigation" modal when explicitly requested
+      // (e.g. from the Overview screen's "+ New Investigation" button).
+      setAutoOpenNewInvestigation(!!data?.openNew);
+    }
+
     if (s === "network-risk" && data) {
       const displayId =
         typeof data === "string"
@@ -104,7 +111,7 @@ export default function App() {
       case "network-risk": return <NetworkRiskScreen navigate={navigate} displayId={networkDisplayId} />;
       case "listings": return <ListingsScreen />;
       case "blockchain": return <BlockchainScreen />;
-      case "investigations": return <InvestigationsScreen navigate={navigate} />;
+      case "investigations": return <InvestigationsScreen navigate={navigate} autoOpenNew={autoOpenNewInvestigation} />;
       case "workspace":
         return (
           <WorkspaceScreen
@@ -126,7 +133,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Topbar />
+      <Topbar navigate={navigate} />
       <Sidebar current={screen} navigate={navigate} />
       <main className="main scroll-reveal" style={graphFull ? { overflow: "hidden" } : {}}>
         {renderScreen()}

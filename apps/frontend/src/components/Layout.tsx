@@ -93,7 +93,7 @@ export function Topbar({
 {/* Notifications */}
 <div style={{ position:"relative" }}>
   <button
-    onClick={() => setShowNotifications(prev => !prev)}
+    onClick={() => navigate("alerts")}
     aria-label="Notifications"
     style={{
       position:"relative",

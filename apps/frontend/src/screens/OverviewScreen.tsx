@@ -138,7 +138,6 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
               {connected?"Live":"Offline"}
             </span>
           </div>
-          <button className="btn btn-ghost btn-sm">Export</button>
           <button
             className={`btn btn-sm ${simulating?"btn-ghost":"btn-primary"}`}
             onClick={handleSimulate}
@@ -148,7 +147,7 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
               ? <><span style={{width:12,height:12,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.7s linear infinite",display:"inline-block",marginRight:6}}/> Simulating…</>
               : "⚡ Simulate Incoming Intelligence"}
           </button>
-          <button className="btn btn-primary btn-sm" onClick={()=>navigate("investigations")}>+ New Investigation</button>
+          <button className="btn btn-primary btn-sm" onClick={()=>navigate("investigations",{openNew:true})}>+ New Investigation</button>
         </div>
       </div>
 
