@@ -5,7 +5,7 @@
 // Sarah Jamie Lewis "Dark Web Data Dumps" CSVs (Hansa Dec 2016 + Valhalla
 // Oct 2016 listings — the same source seed.ts's ~120 hand-typed listings
 // and hansaSource/valhallaSource rows were already sampled from) and
-// imports a curated ~1,500-listing slice plus Entity rows for the top
+// imports a curated ~380-listing slice plus Entity rows for the top
 // vendors by listing count.
 //
 // What's real vs. derived (so nothing here silently invents data):
@@ -50,7 +50,7 @@ const prisma = new PrismaClient()
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // ─── Tunables (answers to the scope questions) ─────────────────────────────
-const TARGET_LISTING_COUNT = 1500
+const TARGET_LISTING_COUNT = 380
 const TOP_VENDOR_COUNT = 40
 const MAX_LISTINGS_PER_TOP_VENDOR = 15
 const EUR_TO_USD = 1.08 // fixed approximate 2016-era rate — not a live FX call
@@ -243,7 +243,7 @@ async function main() {
   }
 
   const selected = [...vendorRows, ...strideRows].slice(0, TARGET_LISTING_COUNT)
-  console.log(`Curated sample: ${selected.length} listings (${vendorRows.length} from top vendors, ${strideRows.length} sampled)`)
+  console.log(`Curated sample: ${selected.length} listings (${vendorRows.length} from top vendors, ${strideRows.length} sampled) — target total with hand-typed seed rows ≈ ${TARGET_LISTING_COUNT + 120}`)
 
   // ─── Skip anything whose displayId already exists (hand-typed seed rows,
   // or a prior run of this script) ──────────────────────────────────────────
