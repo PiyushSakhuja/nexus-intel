@@ -8,7 +8,7 @@ import {
   riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
   activityTimeline, riskDistribution, networkRiskEvolution,
   alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
-  kpis, alerts, emergingNetworks, listings, wallets,
+  kpis, alerts, emergingNetworks, wallets,
   investigations, evidenceRecords,
   auditLog, flagContributions, networkSignals, caseTimeline,
   type Entity, type Alert, type Investigation, type EvidenceRecord,
@@ -23,8 +23,8 @@ const MIN_VIEWBOX_SIZE = 220; // most zoomed-in
 const MAX_VIEWBOX_SIZE = 1800; // most zoomed-out
 const ZOOM_FACTOR = 1.25;
 
-const typeColors: Record<string, string> = { entity: "#6366f1", market: "#8b5cf6", listing: "#d97706", wallet: "#06b6d4", comm: "#16a34a", txn: "#ea580c" };
-const typeIcons: Record<string, string> = { entity: "◈", market: "▤", listing: "▣", wallet: "◇", comm: "◉", txn: "◫" };
+const typeColors: Record<string, string> = { entity: "#6366f1", market: "#8b5cf6", wallet: "#06b6d4", comm: "#16a34a" };
+const typeIcons: Record<string, string> = { entity: "◈", market: "▤", wallet: "◇", comm: "◉" };
 const ALL_TYPES = Object.keys(typeColors);
 const toolbarIconStyle: React.CSSProperties = {
   background: "none", border: "none", color: "var(--text-3)", cursor: "pointer",
@@ -508,7 +508,7 @@ const [mode, setMode] = useState<"entity" | "network">("entity");
 const [liveNodes, setLiveNodes] = useState<any[]>([]);
 const [liveEdges, setLiveEdges] = useState<any[]>([]);
 const [visibleTypes, setVisibleTypes] = useState<Set<string>>(
-  new Set(ALL_TYPES.filter((type) => type !== "listing" && type !== "txn"))
+  new Set(ALL_TYPES)
 );
 
 // Fetch state — shared by both the global graph (/api/graph) and the
@@ -543,13 +543,27 @@ useEffect(() => {
     return;
   }
 
-  apiGet<any>("/api/graph")
-    .then(({ nodes, edges }) => {
-      // Explicit replace, not a length-gated merge — an empty API response
-      // must clear whatever graph was previously shown, not leave it in place.
-      setLiveNodes((nodes ?? []).map(normalizeNode));
-      setLiveEdges((edges ?? []).map(normalizeEdge));
-    })
+apiGet<any>("/api/graph")
+  .then(({ nodes, edges }) => {
+    const filteredNodes = (nodes ?? [])
+      .filter((n: any) => (n.type ?? "").toLowerCase() !== "listing" && (n.type ?? "").toLowerCase() !== "txn")
+      .map(normalizeNode);
+
+    const allowedNodeIds = new Set(
+      filteredNodes.map((n: any) => n.id)
+    );
+
+    const filteredEdges = (edges ?? [])
+      .filter(
+        (e: any) =>
+          allowedNodeIds.has(e.from ?? e.fromId) &&
+          allowedNodeIds.has(e.to ?? e.toId)
+      )
+      .map(normalizeEdge);
+
+    setLiveNodes(filteredNodes);
+    setLiveEdges(filteredEdges);
+  })
     .catch((err) => {
       setError(err.message ?? "Unable to load graph.");
       setLiveNodes([]);

@@ -4,8 +4,8 @@ let graphSyncInFlight: Promise<{ nodeCount: number; edgeCount: number }> | null 
 // Deterministic hash -> angle, so each node always lands in the same
 // visual position on the graph regardless of how many other nodes exist or
 // in what order they were created. This means adding entity #23 (or
-// listing #9, wallet #4, etc.) later never reshuffles where the existing
-// nodes are drawn. Works for any node id, not just entities.
+// wallet #4, etc.) later never reshuffles where the existing nodes are
+// drawn. Works for any node id, not just entities.
 function hashToUnitInterval(id: string): number {
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
@@ -28,39 +28,42 @@ function positionForNode(nodeId: string): { x: number; y: number } {
 
 const entityGraphNodeId = (entityId: string) => `gph_${entityId}`;
 // Deterministic, collision-safe ids for the non-entity node types. Each of
-// these corresponds to a real DB record (a Listing row, a Wallet row, a
-// WalletTransaction row) or a distinct Listing.marketplace value actually
-// present in the data — never a hardcoded/invented id.
+// these corresponds to a real DB record (a Wallet row) or a distinct
+// Listing.marketplace value actually present in the data — never a
+// hardcoded/invented id.
 const marketGraphNodeId = (marketplace: string) =>
   `gph_market_${marketplace.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
-const listingGraphNodeId = (listingId: string) => `gph_listing_${listingId}`;
 const walletGraphNodeId = (walletId: string) => `gph_wallet_${walletId}`;
-const txnGraphNodeId = (txnId: string) => `gph_txn_${txnId}`;
 
-// Rebuilds GraphNode/GraphEdge from the CURRENT set of entities, listings,
-// wallets, and wallet transactions every time it's called. Safe to call on
-// every GET /api/graph request — upserts are idempotent, so nodes/edges
-// that already match do nothing, and anything newly added (via ingestion,
-// simulate events, etc.) gets a node the very next time the graph is
-// requested, with no manual reseed.
+// Rebuilds GraphNode/GraphEdge from the CURRENT set of entities, listings
+// (market derivation only), and wallets every time it's called. Safe to
+// call on every GET /api/graph request — upserts are idempotent, so
+// nodes/edges that already match do nothing, and anything newly added (via
+// ingestion, simulate events, etc.) gets a node the very next time the
+// graph is requested, with no manual reseed.
 //
 // IMPORTANT: this used to delete every GraphNode with entityId === null on
 // every call, on the assumption that a null entityId meant "leftover
 // manual/demo scaffolding." That assumption was wrong — per schema.prisma,
 // entityId === null is also the CORRECT, intentional shape for every
-// non-entity node type (Market/Listing/Wallet/Txn), since those aren't
-// backed by an Entity row at all. That delete was silently wiping real
-// marketplace/listing/wallet/txn nodes (e.g. Hansa, Valhalla, and their
-// listings) on every single graph load, before they ever had a chance to
-// be synced — because nothing synced them in the first place. Both halves
-// of that bug are fixed below: real nodes are now synced for every backed
-// type, and only nodes with NO backing row of any kind are removed.
+// non-entity node type (Market/Wallet), since those aren't backed by an
+// Entity row at all. That delete was silently wiping real marketplace/
+// wallet nodes (e.g. Hansa, Valhalla) on every single graph load, before
+// they ever had a chance to be synced — because nothing synced them in the
+// first place. Both halves of that bug are fixed below: real nodes are now
+// synced for every backed type, and only nodes with NO backing row of any
+// kind are removed.
+//
+// NOTE: Listing and WalletTransaction ("TXN") graph nodes/edges have been
+// intentionally removed. `allListings` is still queried, but only to
+// derive Market nodes (a Market's identity and risk come from the
+// distinct marketplace names and risk values on real Listing rows) — no
+// per-listing node or edge is created anymore.
 export async function syncGraphFromEntities(prisma: PrismaClient): Promise<{ nodeCount: number; edgeCount: number }> {
-  const [allEntities, allListings, allWallets, allWalletTxns] = await Promise.all([
+  const [allEntities, allListings, allWallets] = await Promise.all([
     prisma.entity.findMany({ include: { identifiers: true } }),
     prisma.listing.findMany(),
     prisma.wallet.findMany(),
-    prisma.walletTransaction.findMany(),
   ]);
 
   // Edges are always fully recomputed below from current data, so it's
@@ -69,7 +72,7 @@ export async function syncGraphFromEntities(prisma: PrismaClient): Promise<{ nod
 
   // Tracks every node id this sync pass actually produced from a real row
   // — across every node type. Used below to remove nodes that no longer
-  // have ANY backing record (e.g. a Listing that was deleted), without
+  // have ANY backing record (e.g. a Wallet that was deleted), without
   // touching anything that's still real. Nothing added to this set is
   // invented — it's exactly "one id per real row we just upserted."
   const liveNodeIds = new Set<string>();
@@ -111,7 +114,6 @@ export async function syncGraphFromEntities(prisma: PrismaClient): Promise<{ nod
     listingsByMarketplace.get(listing.marketplace)!.push(listing);
   }
 
-  const marketNodeIdByName = new Map<string, string>();
   for (const [marketplace, marketListings] of listingsByMarketplace) {
     const nodeId = marketGraphNodeId(marketplace);
     const avgRisk = Math.round(
@@ -123,27 +125,10 @@ export async function syncGraphFromEntities(prisma: PrismaClient): Promise<{ nod
       update: { label: marketplace, risk: avgRisk, x, y },
       create: { id: nodeId, label: marketplace, type: "MARKET", risk: avgRisk, x, y },
     });
-    marketNodeIdByName.set(marketplace, nodeId);
-    liveNodeIds.add(nodeId);
-  }
-
-  // ── Listings ──────────────────────────────────────────────────────────
-  const listingNodeIdByListingId = new Map<string, string>();
-  for (const listing of allListings) {
-    const nodeId = listingGraphNodeId(listing.id);
-    const { x, y } = positionForNode(nodeId);
-    const label = listing.title ?? listing.displayId;
-    await prisma.graphNode.upsert({
-      where: { id: nodeId },
-      update: { label, risk: listing.risk, x, y },
-      create: { id: nodeId, label, type: "LISTING", risk: listing.risk, x, y },
-    });
-    listingNodeIdByListingId.set(listing.id, nodeId);
     liveNodeIds.add(nodeId);
   }
 
   // ── Wallets ───────────────────────────────────────────────────────────
-  const walletNodeIdByWalletId = new Map<string, string>();
   for (const wallet of allWallets) {
     const nodeId = walletGraphNodeId(wallet.id);
     const { x, y } = positionForNode(nodeId);
@@ -152,28 +137,6 @@ export async function syncGraphFromEntities(prisma: PrismaClient): Promise<{ nod
       update: { label: wallet.displayId, risk: wallet.risk, x, y },
       create: { id: nodeId, label: wallet.displayId, type: "WALLET", risk: wallet.risk, x, y },
     });
-    walletNodeIdByWalletId.set(wallet.id, nodeId);
-    liveNodeIds.add(nodeId);
-  }
-
-  // ── Wallet transactions ("Txn" node type) ────────────────────────────────
-  // WalletTransaction has no risk column of its own, so its node reuses
-  // its own Wallet's real, already-computed risk rather than inventing a
-  // per-transaction score.
-  const txnNodeIdByTxnId = new Map<string, string>();
-  const walletById = new Map(allWallets.map((w) => [w.id, w]));
-  for (const txn of allWalletTxns) {
-    const wallet = walletById.get(txn.walletId);
-    if (!wallet) continue; // dangling FK — skip rather than crash
-    const nodeId = txnGraphNodeId(txn.id);
-    const { x, y } = positionForNode(nodeId);
-    const label = `${txn.direction === "INBOUND" ? "In" : "Out"} ${txn.amountBtcEq} BTC-eq`;
-    await prisma.graphNode.upsert({
-      where: { id: nodeId },
-      update: { label, risk: wallet.risk, x, y },
-      create: { id: nodeId, label, type: "TXN", risk: wallet.risk, x, y },
-    });
-    txnNodeIdByTxnId.set(txn.id, nodeId);
     liveNodeIds.add(nodeId);
   }
 
@@ -237,43 +200,6 @@ export async function syncGraphFromEntities(prisma: PrismaClient): Promise<{ nod
           `Shared Shipping Origin: ${shipsFrom}`
         );
       }
-    }
-  }
-
-  // Listing -> Market: which marketplace a listing actually appeared on.
-  for (const listing of allListings) {
-    if (!listing.marketplace) continue;
-    const marketNodeId = marketNodeIdByName.get(listing.marketplace);
-    const listingNodeId = listingNodeIdByListingId.get(listing.id);
-    if (marketNodeId && listingNodeId) {
-      await upsertEdge(listingNodeId, marketNodeId, "Listed On");
-    }
-  }
-
-  // Listing -> Entity: Listing.vendorAlias is documented in schema.prisma
-  // as matching Entity.alias for the listing's vendor — the same
-  // correlation key lib/vendorRisk.ts already relies on — so this links
-  // real, already-established vendor identity, not a guessed relationship.
-  const entityIdByAlias = new Map(allEntities.map((e) => [e.alias, e.id]));
-  for (const listing of allListings) {
-    if (!listing.vendorAlias) continue;
-    const vendorEntityId = entityIdByAlias.get(listing.vendorAlias);
-    const listingNodeId = listingNodeIdByListingId.get(listing.id);
-    if (vendorEntityId && listingNodeId) {
-      await upsertEdge(listingNodeId, nodeIdByEntityId.get(vendorEntityId)!, "Vendor");
-    }
-  }
-
-  // WalletTransaction -> Wallet (always), and -> Entity when the
-  // transaction carries a real entityId.
-  for (const txn of allWalletTxns) {
-    const txnNodeId = txnNodeIdByTxnId.get(txn.id);
-    const walletNodeId = walletNodeIdByWalletId.get(txn.walletId);
-    if (!txnNodeId || !walletNodeId) continue;
-    await upsertEdge(txnNodeId, walletNodeId, "On Wallet");
-    if (txn.entityId) {
-      const entityNodeId = nodeIdByEntityId.get(txn.entityId);
-      if (entityNodeId) await upsertEdge(txnNodeId, entityNodeId, "Transacted By");
     }
   }
 
