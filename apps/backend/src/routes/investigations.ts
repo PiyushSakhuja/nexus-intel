@@ -3,8 +3,32 @@ import { prisma } from "../lib/prisma.js";
 import { getIo } from "../sockets/io.js";
 import { generateInvestigationAssessment } from "../lib/investigationAssessment.js";
 import { DEFAULT_MODEL, MODEL_OPTIONS, type SupportedModel } from "../lib/llmClient.js";
+import { computeVendorRisk, type VendorRisk } from "../lib/vendorRisk.js";
+import { computeEntityRisk, type EntityComputedRisk } from "../lib/entityRisk.js";
+import type { ListingInput } from "../lib/riskEngine.js";
+import { bfsSubgraph } from "../lib/graphTraversal.js";
 
 export const investigationsRouter = Router();
+
+// Same pattern already used independently in routes/entities.ts,
+// routes/networks.ts, routes/alerts.ts, and routes/simulate.ts — kept as a
+// local duplicate here rather than a shared import so this file's changes
+// stay self-contained and don't risk touching those other routes' behavior.
+async function buildVendorRiskMap(): Promise<Map<string, VendorRisk>> {
+  const listings = await prisma.listing.findMany();
+  const inputs: ListingInput[] = listings.map((l) => ({
+    id: l.id,
+    category: l.category,
+    title: l.title,
+    priceUsd: l.priceUsd,
+    marketplace: l.marketplace,
+    vendorAlias: l.vendorAlias,
+    shipsFrom: l.shipsFrom,
+    firstSeen: l.firstSeen,
+    lastSeen: l.lastSeen,
+  }));
+  return computeVendorRisk(inputs);
+}
 
 // POST /api/investigations — create a new investigation
 investigationsRouter.post("/", async (req, res) => {
@@ -145,6 +169,119 @@ investigationsRouter.delete("/:displayId/entities/:entityId", async (req, res) =
   res.status(204).send();
 });
 
+// GET /api/investigations/:displayId/graph — investigation-SCOPED subgraph.
+//
+// Derives the subgraph purely from existing, persisted relationships:
+//   Investigation -> InvestigationEntity -> Entity -> GraphNode -> GraphEdge
+// via bounded BFS (lib/graphTraversal.ts). Creates NO nodes, NO edges, NO
+// investigationId column — see the audit note this endpoint was built from
+// for why that's unnecessary for the current graph size/shape: most of this
+// investigation's entities already have a GraphNode (entityId FK), and the
+// existing GraphEdge rows already reach the relevant market/wallet/listing
+// nodes from there. Entities that DON'T have a GraphNode are reported
+// explicitly (`entitiesWithoutGraphNode`) rather than silently dropped or
+// papered over with an invented node.
+//
+// This does not change GET /api/graph (routes/graph.ts) at all — that
+// route is untouched and still returns the full global graph.
+const INVESTIGATION_GRAPH_MAX_DEPTH = 2;
+
+investigationsRouter.get("/:displayId/graph", async (req, res) => {
+  const inv = await prisma.investigation.findUnique({
+    where: { displayId: req.params.displayId },
+    include: { entities: { include: { entity: { include: { graphNode: true } } } } },
+  });
+  if (!inv) return res.status(404).json({ error: "Investigation not found" });
+
+  const entitiesWithNode = inv.entities.filter((ie) => ie.entity.graphNode);
+  const entitiesWithoutNode = inv.entities.filter((ie) => !ie.entity.graphNode);
+  const rootNodeIds = entitiesWithNode.map((ie) => ie.entity.graphNode!.id);
+
+  const base = {
+    investigation: { displayId: inv.displayId, title: inv.title },
+    maxDepth: INVESTIGATION_GRAPH_MAX_DEPTH,
+    rootNodeIds,
+    entitiesConsidered: inv.entities.length,
+    entitiesWithoutGraphNode: entitiesWithoutNode.map((ie) => ({
+      alias: ie.entity.alias,
+      displayId: ie.entity.displayId,
+    })),
+  };
+
+  if (rootNodeIds.length === 0) {
+    return res.json({
+      ...base,
+      nodes: [],
+      edges: [],
+      calculable: false,
+      explanation:
+        inv.entities.length === 0
+          ? "This investigation has no linked entities yet, so no investigation-specific graph can be derived."
+          : "None of this investigation's linked entities have a corresponding graph node, so no investigation-specific graph can be derived from the current graph data.",
+    });
+  }
+
+  const [allNodes, allEdges] = await Promise.all([prisma.graphNode.findMany(), prisma.graphEdge.findMany()]);
+
+  const { nodeIds, depthById } = bfsSubgraph(allNodes, allEdges, rootNodeIds, INVESTIGATION_GRAPH_MAX_DEPTH);
+
+  const nodes = allNodes
+    .filter((n) => nodeIds.has(n.id))
+    .map((n) => ({
+      ...n,
+      depthFromInvestigation: depthById.get(n.id) ?? null,
+      isInvestigationEntity: rootNodeIds.includes(n.id),
+    }));
+
+  // Only edges whose BOTH endpoints made it into the reached set — never an
+  // edge to a node the investigation isn't actually connected to.
+  const edges = allEdges.filter((e) => nodeIds.has(e.fromId) && nodeIds.has(e.toId));
+
+  res.json({
+    ...base,
+    nodes,
+    edges,
+    calculable: true,
+    explanation: `Derived from ${rootNodeIds.length} entity-linked graph node(s) belonging to this investigation, traversed up to ${INVESTIGATION_GRAPH_MAX_DEPTH} hop(s) along existing graph edges. No nodes or edges were created for this response.`,
+  });
+});
+
+// Used by GET /:displayId to recompute the per-entity contributor
+// breakdown from currently-persisted data. POST /:displayId/ai-assessment
+// keeps its own separate inline version below (needed there because it also
+// builds assessmentInput.entities from the same vendorRiskByAlias map) —
+// deliberately NOT refactored into this shared helper to avoid touching
+// that already-working, already-tested endpoint for an unrelated change.
+async function computeEntityRiskContributors(entities: { entity: any }[]) {
+  const vendorRiskByAlias = await buildVendorRiskMap();
+  return entities.map((ie) => {
+    const computed = computeEntityRisk(ie.entity.alias, vendorRiskByAlias);
+    return {
+      alias: ie.entity.alias,
+      displayId: ie.entity.displayId,
+      risk: computed.risk,
+      confidence: computed.confidence,
+      correlated: computed.correlated,
+      contributors: computed.contributors,
+      representativeListingId: computed.representativeListingId,
+      explanation: computed.explanation,
+    };
+  });
+}
+
+// GET /api/investigations/:displayId
+//
+// Includes `entityRiskContributors` — the same real, listing-evidence-derived
+// breakdown previously only returned by POST /ai-assessment (and therefore
+// lost on refresh, since it's not a persisted AiAssessment column). It's
+// recomputed here from currently-persisted Investigation/Entity/Listing data
+// via the existing computeEntityRisk/computeVendorRisk functions — nothing
+// new is stored, nothing in riskEngine.ts's scoring changed, and there's no
+// Prisma schema change. This does mean the numbers reflect CURRENT listing
+// evidence, which can differ slightly from what a past AiAssessment's
+// riskScore was generated from if listings have changed since — that's
+// inherent to not persisting a contributor snapshot per assessment, and is
+// the same trade-off already accepted for entityRisk/vendorRisk elsewhere.
 investigationsRouter.get("/:displayId", async (req, res) => {
   const inv = await prisma.investigation.findUnique({
     where: { displayId: req.params.displayId },
@@ -158,7 +295,10 @@ investigationsRouter.get("/:displayId", async (req, res) => {
     },
   });
   if (!inv) return res.status(404).json({ error: "Investigation not found" });
-  res.json(inv);
+
+  const entityRiskContributors = await computeEntityRiskContributors(inv.entities);
+
+  res.json({ ...inv, entityRiskContributors });
 });
 
 // POST /api/investigations/:displayId/ai-assessment
@@ -194,18 +334,42 @@ investigationsRouter.post("/:displayId/ai-assessment", async (req, res) => {
       ? (requestedModel as SupportedModel)
       : DEFAULT_MODEL;
 
+  // ── Risk provenance fix ────────────────────────────────────────────────
+  // Previously this built assessmentInput.entities directly from
+  // ie.entity.risk/confidence — the raw Entity table columns, which per
+  // lib/entityRisk.ts are LITERAL HAND-TYPED SEED VALUES with no
+  // calculation behind them. routes/entities.ts, routes/networks.ts, and
+  // routes/simulate.ts already prefer computeEntityRisk()'s real,
+  // listing-evidence-derived values; this route did not, so the one place
+  // that answers "why is this investigation high risk" was silently built
+  // on the least trustworthy numbers in the system. Fixed below: use the
+  // computed value when it exists (i.e. the entity's alias correlates to
+  // real listing evidence), fall back to the legacy stored value only when
+  // there's no evidence to compute from — never fabricate a difference,
+  // never silently guess. `computeInvestigationSignals` (the actual scoring
+  // function, in lib/investigationAssessment.ts) is untouched — only its
+  // input data changed.
+  const vendorRiskByAlias = await buildVendorRiskMap();
+  const entityComputedByAlias = new Map<string, EntityComputedRisk>();
+  for (const ie of inv.entities) {
+    entityComputedByAlias.set(ie.entity.alias, computeEntityRisk(ie.entity.alias, vendorRiskByAlias));
+  }
+
   const assessmentInput = {
     displayId: inv.displayId,
     title: inv.title,
     description: inv.description,
     priority: inv.priority,
     status: inv.status,
-    entities: inv.entities.map((ie) => ({
-      alias: ie.entity.alias,
-      risk: ie.entity.risk,
-      confidence: ie.entity.confidence,
-      riskChange: ie.entity.riskChange,
-    })),
+    entities: inv.entities.map((ie) => {
+      const computed = entityComputedByAlias.get(ie.entity.alias)!;
+      return {
+        alias: ie.entity.alias,
+        risk: computed.risk ?? ie.entity.risk,
+        confidence: computed.confidence ?? ie.entity.confidence,
+        riskChange: ie.entity.riskChange,
+      };
+    }),
     evidence: inv.evidence.map((e) => ({ status: e.status })),
     timeline: inv.timeline.map((t) => ({ type: t.type })),
     network: inv.network
@@ -214,6 +378,26 @@ investigationsRouter.post("/:displayId/ai-assessment", async (req, res) => {
   };
 
   const result = await generateInvestigationAssessment(assessmentInput, model);
+
+  // Additive, not persisted: per-entity contributor breakdown (real
+  // riskEngine.ts signals, via computeEntityRisk -> vendorRisk's
+  // representative-listing signals) so the frontend can render a
+  // "WHY FLAGGED" panel per entity, distinct from computeInvestigationSignals'
+  // own investigation-level aggregate signals (which remain what's actually
+  // stored in AiAssessment.signals and fed to the LLM, unchanged).
+  const entityRiskContributors = inv.entities.map((ie) => {
+    const computed = entityComputedByAlias.get(ie.entity.alias)!;
+    return {
+      alias: ie.entity.alias,
+      displayId: ie.entity.displayId,
+      risk: computed.risk,
+      confidence: computed.confidence,
+      correlated: computed.correlated,
+      contributors: computed.contributors,
+      representativeListingId: computed.representativeListingId,
+      explanation: computed.explanation,
+    };
+  });
 
   const assessment = await prisma.aiAssessment.create({
     data: {
@@ -241,7 +425,12 @@ investigationsRouter.post("/:displayId/ai-assessment", async (req, res) => {
     // Socket.IO not initialized (e.g. in isolated tests) — safe to ignore.
   }
 
-  res.status(201).json({ ...assessment, aiGenerated: result.aiGenerated, modelUsed: result.modelUsed });
+  res.status(201).json({
+    ...assessment,
+    aiGenerated: result.aiGenerated,
+    modelUsed: result.modelUsed,
+    entityRiskContributors,
+  });
 });
 
 // PATCH /api/investigations/:displayId/ai-assessment/:assessmentId/review

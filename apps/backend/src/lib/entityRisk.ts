@@ -25,6 +25,7 @@
 // never defaulted to some number.
 
 import type { VendorRisk } from "./vendorRisk.js";
+import { signalsToContributors, type RiskContributor } from "./riskEngine.js";
 
 export interface EntityComputedRisk {
   correlated: boolean;
@@ -38,6 +39,14 @@ export interface EntityComputedRisk {
     highRiskCategoryCount: number;
   } | null;
   explanation: string;
+  // Pass-through of vendorRisk.ts's representative-listing data (see the
+  // comment on VendorRisk.representativeListingId/representativeListingSignals
+  // for why this — and not a decomposition of the blended vendor `risk`
+  // itself — is the honest thing to expose as "why"). `contributors` is
+  // just signalsToContributors() applied to those same real, unmodified
+  // RiskSignal[] — no new scoring, no schema change.
+  representativeListingId: string | null;
+  contributors: RiskContributor[];
 }
 
 export function computeEntityRisk(
@@ -55,6 +64,8 @@ export function computeEntityRisk(
       evidence: null,
       explanation:
         "No listing carries a vendorAlias matching this entity's alias — there is no marketplace evidence to compute risk or confidence from, so both are reported as not calculable rather than defaulted to a number.",
+      representativeListingId: null,
+      contributors: [],
     };
   }
 
@@ -83,6 +94,8 @@ export function computeEntityRisk(
       highRiskCategoryCount: vendor.highRiskCategoryCount,
     },
     explanation: `Derived from ${vendor.listingCount} listing(s) under alias "${vendor.vendorAlias}" across ${vendor.marketplaceCount} marketplace(s) (alias correlation, not identity resolution).`,
+    representativeListingId: vendor.representativeListingId,
+    contributors: signalsToContributors(vendor.representativeListingSignals),
   };
 }
 

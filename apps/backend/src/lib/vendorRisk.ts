@@ -16,7 +16,7 @@
 // networkRisk.ts, routes/vendors.ts) must preserve this caveat rather than
 // presenting it as confirmed identity.
 
-import { scoreListings, HIGH_RISK_CATEGORIES, type ListingInput } from "./riskEngine.js";
+import { scoreListings, HIGH_RISK_CATEGORIES, type ListingInput, type RiskSignal } from "./riskEngine.js";
 
 export interface VendorRisk {
   vendorAlias: string;
@@ -34,6 +34,18 @@ export interface VendorRisk {
   averageListingRisk: number;
   maxListingRisk: number;
   correlationMethod: "vendorAlias_exact_match";
+  // Additive — NOT part of the risk formula above. `risk` is still
+  // meanRisk*0.5 + maxRisk*0.3 + bonuses (see below); it is a blended
+  // aggregate, not a sum of any single listing's signals, so it cannot be
+  // honestly decomposed back into contributor form. What CAN be shown
+  // honestly is the actual, unmodified RiskSignal[] of the vendor's
+  // highest-scoring listing (the listing that drives the 0.3-weighted "max"
+  // term) — real riskEngine.ts output, not recomputed or invented. Exposed
+  // so entity/investigation layers have *something* traceable to point to
+  // when asked "why is this vendor's risk high", without pretending it's a
+  // full breakdown of the blended vendor score.
+  representativeListingId: string | null;
+  representativeListingSignals: RiskSignal[];
 }
 
 // Matches the HIGH status threshold in riskStatus.ts, kept as a named
@@ -72,6 +84,18 @@ export function computeVendorRisk(listings: ListingInput[]): Map<string, VendorR
     const maxRisk = Math.max(...risks);
     const highRiskListingCount = risks.filter((r) => r >= HIGH_RISK_LISTING_THRESHOLD).length;
 
+    // Ties broken by first occurrence in vendorListings (stable, deterministic).
+    let representativeListingId: string | null = null;
+    for (const l of vendorListings) {
+      if (scored.get(l.id)!.score === maxRisk) {
+        representativeListingId = l.id;
+        break;
+      }
+    }
+    const representativeListingSignals = representativeListingId
+      ? scored.get(representativeListingId)!.signals
+      : [];
+
     // Weighted aggregate: mean (0.5) captures typical behavior, max (0.3)
     // ensures one severe listing isn't diluted away by many mild ones, and
     // up to 20 bonus points reward corroborating breadth of evidence
@@ -100,6 +124,8 @@ export function computeVendorRisk(listings: ListingInput[]): Map<string, VendorR
       averageListingRisk: Math.round(meanRisk * 10) / 10,
       maxListingRisk: maxRisk,
       correlationMethod: "vendorAlias_exact_match",
+      representativeListingId,
+      representativeListingSignals,
     });
   }
   return out;

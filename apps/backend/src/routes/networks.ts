@@ -131,19 +131,83 @@ networksRouter.get("/:displayId", async (req, res) => {
 
 // GET /api/networks/:displayId/trajectory — the early-warning risk-over-time
 // chart, built from real NetworkRiskPoint rows instead of a hardcoded array.
-// UNCHANGED — this endpoint was already correctly implemented and is
-// preserved exactly as-is. If a network has no NetworkRiskPoint rows yet
-// (e.g. immediately after a fresh seed, before any /api/simulate/event
-// calls), `riskPoints` will correctly be an empty array — the frontend
-// should render "No historical risk data available" for that case rather
-// than a fabricated chart.
+// `riskPoints`/base network fields are UNCHANGED from before — if a network
+// has no NetworkRiskPoint rows yet (e.g. immediately after a fresh seed,
+// before any /api/simulate/event calls), `riskPoints` will correctly be an
+// empty array, and existing consumers of this shape keep working exactly as
+// before.
+//
+// ADDITIVE: `events` — a chronological merge of this network's real
+// RiskEvents and Alerts, so the frontend can render "70 -> 73 -> 75 -> 87"
+// alongside what actually happened at each step ("09:41 New intelligence",
+// "09:41 Alert generated", etc.) instead of just bare numbers.
+//
+// RiskEvent has no networkId column (only entityId), so events are matched
+// to this network via entity.networkId — this covers every RiskEvent
+// routes/simulate.ts creates (it always resolves an entity, falling back to
+// network.entities[0]). The one exception is routes/networks.ts's own
+// POST /:displayId/recalculate route, which creates a RiskEvent with no
+// entityId at all; those are matched instead by exact-timestamp proximity
+// to one of THIS network's own NetworkRiskPoint rows (created in the same
+// transaction, so timestamps coincide to the millisecond). Both match
+// methods are labeled on each event so this is never silently ambiguous
+// about whether a link is a real FK or an inferred one.
+const RECALC_EVENT_MATCH_WINDOW_MS = 2000;
+
 networksRouter.get("/:displayId/trajectory", async (req, res) => {
   const network = await prisma.network.findUnique({
     where: { displayId: req.params.displayId },
-    include: { riskPoints: { orderBy: { recordedAt: "asc" } } },
+    include: {
+      riskPoints: { orderBy: { recordedAt: "asc" } },
+      entities: { select: { id: true } },
+      alerts: { orderBy: { createdAt: "asc" } },
+    },
   });
   if (!network) return res.status(404).json({ error: "Network not found" });
-  res.json(network);
+
+  const entityIds = network.entities.map((e) => e.id);
+  const recalcPointTimes = network.riskPoints.map((p) => p.recordedAt.getTime());
+
+  const [entityLinkedEvents, unlinkedRecalcEvents] = await Promise.all([
+    entityIds.length > 0
+      ? prisma.riskEvent.findMany({ where: { entityId: { in: entityIds } }, orderBy: { createdAt: "asc" } })
+      : Promise.resolve([]),
+    prisma.riskEvent.findMany({ where: { entityId: null, type: "network_recalculated" }, orderBy: { createdAt: "asc" } }),
+  ]);
+
+  const matchedRecalcEvents = unlinkedRecalcEvents.filter((e) =>
+    recalcPointTimes.some((t) => Math.abs(t - e.createdAt.getTime()) <= RECALC_EVENT_MATCH_WINDOW_MS)
+  );
+
+  const events = [
+    ...entityLinkedEvents.map((e) => ({
+      at: e.createdAt,
+      kind: "risk_event" as const,
+      type: e.type,
+      description: e.description,
+      scoreDelta: e.scoreDelta,
+      matchMethod: "entity_link" as const,
+    })),
+    ...matchedRecalcEvents.map((e) => ({
+      at: e.createdAt,
+      kind: "risk_event" as const,
+      type: e.type,
+      description: e.description,
+      scoreDelta: e.scoreDelta,
+      matchMethod: "time_proximity" as const,
+    })),
+    ...network.alerts.map((a) => ({
+      at: a.createdAt,
+      kind: "alert" as const,
+      type: "alert_generated",
+      description: `${a.title} — ${a.reason}`,
+      severity: a.severity,
+      status: a.status,
+      matchMethod: "network_link" as const, // Alert.networkId is a real FK
+    })),
+  ].sort((a, b) => a.at.getTime() - b.at.getTime());
+
+  res.json({ ...network, events });
 });
 
 // POST /api/networks/:displayId/recalculate — EXPLICIT, non-silent

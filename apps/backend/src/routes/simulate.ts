@@ -73,6 +73,10 @@ simulateRouter.post("/event", async (req, res) => {
   // blended into one formula).
   let deltaInput: { risk: number; confidence: number } | null = null;
   let deltaInputSource: "computed" | "legacy" | "none" = "none";
+  // Captured for the riskChange summary in the response below — hoisted out
+  // of the `if (entity)` block since it's needed regardless of whether a
+  // correlation was found.
+  let correlationSummary: { entity: string; confidence: number; method: string } | null = null;
   if (entity) {
     const listings = await prisma.listing.findMany();
     const inputs: ListingInput[] = listings.map((l) => ({
@@ -94,6 +98,11 @@ simulateRouter.post("/event", async (req, res) => {
     // fields are always present for backward compatibility with any
     // existing consumer of this event.
     const correlationGroup = getCorrelationForAlias(entity.alias, correlateListings(inputs));
+    correlationSummary = {
+      entity: entity.alias,
+      confidence: correlationGroup?.confidence ?? entity.confidence,
+      method: correlationGroup?.method ?? "none",
+    };
     emit("correlation", {
       entity: entity.alias,
       confidence: correlationGroup?.confidence ?? entity.confidence,
@@ -161,5 +170,22 @@ simulateRouter.post("/event", async (req, res) => {
     emit("alert_generated", alert);
   }
 
-  res.status(201).json({ riskEvent, network: updatedNetwork, alert, deltaInputSource });
+  // Explicit, non-derived risk-change summary — every field here is a value
+  // already computed/persisted above (network.risk captured before the
+  // update, newNetworkRisk/scoreDelta from the deterministic delta calc,
+  // chosen.description and correlationSummary from the real event/
+  // correlation that just ran). Nothing here is invented after the fact;
+  // it's the same numbers already written to riskEvent/updatedNetwork,
+  // just assembled into one place so the frontend doesn't have to
+  // back-calculate "previous risk" from `change`.
+  const riskChange = {
+    previousRisk: network.risk,
+    currentRisk: newNetworkRisk,
+    change: scoreDelta,
+    trigger: chosen.description,
+    correlation: correlationSummary,
+    alertGenerated: alert !== null,
+  };
+
+  res.status(201).json({ riskEvent, network: updatedNetwork, alert, deltaInputSource, riskChange });
 });

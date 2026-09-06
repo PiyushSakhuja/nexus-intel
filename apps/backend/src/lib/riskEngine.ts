@@ -17,9 +17,75 @@
 
 // ─── Public types ────────────────────────────────────────────────────────
 
+// Canonical, stable identifiers for each contributing feature — one per key
+// in WEIGHTS below. These are NOT new scoring logic; they're a presentation
+// tag attached to signals that are already produced by the existing
+// functions, so downstream layers (vendor/entity/investigation aggregation,
+// the API boundary, the frontend) can group/label/aggregate contributors
+// without string-matching `label` (which is meant to be a free-text,
+// possibly-unique-per-instance description, e.g. "500g in title").
+export type RiskFactor =
+  | "categoryBase"
+  | "bulkQuantity"
+  | "priceOutlier"
+  | "contentIndicator"
+  | "crossMarketplace"
+  | "listingVelocity"
+  | "riskDiversity"
+  | "newVendorHighRisk";
+
 export interface RiskSignal {
   label: string;
   value: number; // points this signal contributed to the final score
+  factor?: RiskFactor; // canonical id of the feature that produced this signal
+}
+
+// Presentation-only labels for each canonical factor, kept alongside the
+// engine (which owns the identifiers) rather than re-derived at each API
+// boundary. Purely cosmetic — does not affect scoring.
+export const FACTOR_LABELS: Record<RiskFactor, string> = {
+  categoryBase: "High-risk category",
+  bulkQuantity: "Bulk quantity",
+  priceOutlier: "Price outlier",
+  contentIndicator: "Content indicators",
+  crossMarketplace: "Cross-marketplace",
+  listingVelocity: "Listing velocity",
+  riskDiversity: "Risk diversity",
+  newVendorHighRisk: "Vendor risk",
+};
+
+export interface RiskContributor {
+  factor: RiskFactor | "other";
+  label: string;
+  contribution: number;
+}
+
+/**
+ * Flattens RiskSignal[] into the presentation-ready contributor shape used
+ * at API boundaries (see project brief: { factor, label, contribution }).
+ * Signals sharing the same factor (e.g. multiple contentIndicator hits) are
+ * summed under that factor rather than listed as separate rows — the sum is
+ * exactly what those signals already contributed to the score, nothing
+ * recomputed. Signals without a `factor` tag (should not normally occur —
+ * every producing function below sets one) fall back to "other" rather than
+ * being silently dropped.
+ */
+export function signalsToContributors(signals: RiskSignal[]): RiskContributor[] {
+  const byFactor = new Map<string, RiskContributor>();
+  for (const s of signals) {
+    const factor = s.factor ?? "other";
+    const existing = byFactor.get(factor);
+    if (existing) {
+      existing.contribution += s.value;
+    } else {
+      byFactor.set(factor, {
+        factor,
+        label: s.factor ? FACTOR_LABELS[s.factor] : s.label,
+        contribution: s.value,
+      });
+    }
+  }
+  return Array.from(byFactor.values()).sort((a, b) => b.contribution - a.contribution);
 }
 
 export interface RiskResult {
@@ -77,7 +143,7 @@ const CATEGORY_RISK_DEFAULT = 8;
 function categoryBaseRisk(category: string): RiskSignal | null {
   const value = CATEGORY_RISK[category] ?? CATEGORY_RISK_DEFAULT;
   if (value <= 0) return null;
-  return { label: `Category baseline: ${category}`, value };
+  return { label: `Category baseline: ${category}`, value, factor: "categoryBase" };
 }
 
 // High-risk categories used by several other features below. Defined once
@@ -134,7 +200,7 @@ function bulkQuantityIndicator(title: string | null): RiskSignal | null {
 
   if (candidates.length === 0) return null;
   const best = candidates.reduce((a, b) => (b.value > a.value ? b : a));
-  return { label: `Bulk quantity detected (${best.detail})`, value: best.value };
+  return { label: `Bulk quantity detected (${best.detail})`, value: best.value, factor: "bulkQuantity" };
 }
 
 // ─── Feature 4: high-risk content/title indicators ──────────────────────
@@ -167,7 +233,7 @@ function contentIndicators(title: string | null): RiskSignal[] {
   const out: RiskSignal[] = [];
   for (const group of CONTENT_GROUPS) {
     if (group.pattern.test(title)) {
-      out.push({ label: `Content indicator: ${group.label}`, value: group.value });
+      out.push({ label: `Content indicator: ${group.label}`, value: group.value, factor: "contentIndicator" });
     }
   }
   return out;
@@ -307,6 +373,7 @@ function priceOutlier(listing: ListingInput, pop: Population): RiskSignal | null
   return {
     label: `Price outlier vs ${basis} (z=${z.toFixed(2)})`,
     value,
+    factor: "priceOutlier",
   };
 }
 
@@ -317,7 +384,7 @@ function crossMarketplace(listing: ListingInput, pop: Population): RiskSignal | 
   const v = pop.vendorStats.get(listing.vendorAlias);
   if (!v || v.marketplaces.size < 2) return null;
   const markets = Array.from(v.marketplaces).sort().join(" & ");
-  return { label: `Cross-marketplace vendor (${markets})`, value: WEIGHTS.crossMarketplace };
+  return { label: `Cross-marketplace vendor (${markets})`, value: WEIGHTS.crossMarketplace, factor: "crossMarketplace" };
 }
 
 // ─── Feature 6: listing velocity ────────────────────────────────────────
@@ -337,6 +404,7 @@ function listingVelocity(listing: ListingInput, pop: Population): RiskSignal | n
   return {
     label: `Elevated listing velocity (${ratio.toFixed(1)}x baseline vendor rate)`,
     value,
+    factor: "listingVelocity",
   };
 }
 
@@ -351,7 +419,7 @@ function riskDiversity(listing: ListingInput, pop: Population): RiskSignal | nul
   if (count >= 3) value = 5;
   else if (count === 2) value = 3;
   if (value === 0) return null;
-  return { label: `Vendor active in ${count} distinct high-risk categories`, value };
+  return { label: `Vendor active in ${count} distinct high-risk categories`, value, factor: "riskDiversity" };
 }
 
 // ─── Feature 8: new vendor + high-risk category ─────────────────────────
@@ -363,7 +431,11 @@ function newVendorHighRisk(listing: ListingInput, pop: Population): RiskSignal |
   const isNew = v.firstSeenMin >= pop.newVendorCutoff;
   const isHighRiskCategory = HIGH_RISK_CATEGORIES.has(listing.category);
   if (!isNew || !isHighRiskCategory) return null;
-  return { label: "Recently first-seen vendor active in a high-risk category", value: WEIGHTS.newVendorHighRisk };
+  return {
+    label: "Recently first-seen vendor active in a high-risk category",
+    value: WEIGHTS.newVendorHighRisk,
+    factor: "newVendorHighRisk",
+  };
 }
 
 // Feature 9 (vendor price consistency/anomaly) from the design brief is
