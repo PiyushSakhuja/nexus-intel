@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
   PieChart, Pie, Cell, XAxis, YAxis,
@@ -9,7 +9,7 @@ import {
   activityTimeline, riskDistribution, networkRiskEvolution,
   alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
   kpis, alerts, emergingNetworks, listings, wallets,
-  investigations, evidenceRecords, graphNodes, graphEdges,
+  investigations, evidenceRecords,
   auditLog, flagContributions, networkSignals, caseTimeline,
   type Entity, type Alert, type Investigation, type EvidenceRecord,
 } from "../data";
@@ -31,6 +31,464 @@ const toolbarIconStyle: React.CSSProperties = {
   padding: "5px 8px", borderRadius: 5, fontSize: 16, transition: "color 0.12s",
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Deterministic force-directed layout
+//
+// Replaces trusting whatever x/y the API returned. Positions are derived
+// entirely client-side from the actual node/edge topology so that:
+//   - connected nodes are pulled into visually coherent clusters
+//   - disconnected components are kept apart, never interleaved
+//   - a minimum center-to-center distance is enforced (no overlap)
+//   - the same graph data always produces the exact same layout — no
+//     Math.random anywhere; initial placement is derived from a hash of
+//     each node's own id
+//   - the simulation runs a bounded number of iterations with a cooling
+//     schedule and stops early on convergence, rather than animating
+//     forever
+//
+// This is a plain, dependency-free Fruchterman-Reingold-style simulation
+// (attraction along real edges + global repulsion + a final collision
+// pass), not a general physics engine — graphs here are small (tens of
+// nodes), so the O(n^2)-per-iteration cost is negligible.
+//
+// This does not change what the API returns or what x/y mean in the graph
+// data model — it only changes which coordinates the screen renders with.
+// ─────────────────────────────────────────────────────────────────────────
+
+const LAYOUT_LINK_DISTANCE = 70;    // ideal spring length along a real edge, and
+                                     // the shared "k" for both spring attraction and
+                                     // node repulsion below. Lower k simultaneously
+                                     // strengthens attraction (force ∝ dist²/k) and
+                                     // weakens repulsion (force ∝ k²/dist) for the
+                                     // same pair of nodes, which is exactly the
+                                     // "connected things should read as a group"
+                                     // balance this graph needs — a single shared
+                                     // constant, not two competing ones to tune.
+const LAYOUT_MIN_GAP = 56;          // minimum center-to-center distance — clears
+                                     // the largest node radius (~18px, max risk) on
+                                     // both sides plus room for its label
+const LAYOUT_COMPONENT_GAP = 40;    // ring spacing enforced between the main
+                                     // component, its satellites, and the outer
+                                     // ring of isolated nodes — tightened from
+                                     // 65 alongside the initial-radius change
+                                     // above so components stay visually
+                                     // distinct without pushing the overall
+                                     // composition out onto huge empty rings
+const LAYOUT_MAX_ITERATIONS = 300;
+const LAYOUT_CONVERGENCE_EPSILON = 0.03;
+const LAYOUT_PADDING = 70;          // outer padding when fitting the viewport
+
+type LayoutPoint = { x: number; y: number };
+type LayoutEdge = { from: string; to: string };
+
+// Deterministic string hash -> [0,1). Same node id always yields the same
+// starting angle, so re-syncing identical underlying data never reshuffles
+// the layout.
+function layoutHash(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return (h % 10000) / 10000;
+}
+
+// Undirected BFS over the real edge set to find connected components,
+// including isolated nodes as their own size-1 component. Dangling edges
+// (endpoint not in the node set) are ignored — same convention already
+// used server-side in graphTraversal.ts.
+function findConnectedComponents(nodeIds: string[], edges: LayoutEdge[]): string[][] {
+  const adjacency = new Map<string, string[]>();
+  nodeIds.forEach((id) => adjacency.set(id, []));
+  edges.forEach((e) => {
+    if (!adjacency.has(e.from) || !adjacency.has(e.to)) return;
+    adjacency.get(e.from)!.push(e.to);
+    adjacency.get(e.to)!.push(e.from);
+  });
+
+  const visited = new Set<string>();
+  const components: string[][] = [];
+  // Fixed sort order (not fetch/insertion order) so component discovery —
+  // and therefore packing order — never depends on API response ordering.
+  const orderedIds = [...nodeIds].sort();
+
+  for (const id of orderedIds) {
+    if (visited.has(id)) continue;
+    const queue = [id];
+    visited.add(id);
+    const comp: string[] = [];
+    let head = 0;
+    while (head < queue.length) {
+      const current = queue[head++];
+      comp.push(current);
+      for (const n of adjacency.get(current) ?? []) {
+        if (!visited.has(n)) { visited.add(n); queue.push(n); }
+      }
+    }
+    comp.sort();
+    components.push(comp);
+  }
+
+  // Largest / most-connected clusters first, tie-broken by lowest id — keeps
+  // hub clusters near the center of the packed layout and keeps packing
+  // order stable across re-syncs of identical data.
+  components.sort((a, b) => b.length - a.length || (a[0] < b[0] ? -1 : 1));
+  return components;
+}
+
+// Lays out a single connected component in its own local coordinate space
+// (centered near the origin). A lone node short-circuits to (0,0).
+function layoutComponent(ids: string[], edges: LayoutEdge[]): Map<string, LayoutPoint> {
+  const positions = new Map<string, LayoutPoint>();
+  if (ids.length === 1) {
+    positions.set(ids[0], { x: 0, y: 0 });
+    return positions;
+  }
+
+  // Deterministic initial placement: a ring whose radius grows with
+  // component size, so the starting layout is never more cramped than the
+  // simulation can reasonably untangle. Previously scaled as sqrt(n) with a
+  // floor of 1x LAYOUT_LINK_DISTANCE, which made large components start out
+  // (and, since the repulsion/spring balance only ever contracts so far,
+  // largely stay) enormous. Scaling by 0.55x brings the starting ring in
+  // substantially tighter while the 0.8 floor still keeps small components
+  // from starting cramped enough to fight the simulation.
+  const initialRadius =
+    LAYOUT_LINK_DISTANCE * Math.max(0.8, Math.sqrt(ids.length) * 0.55);
+  ids.forEach((id) => {
+    const angle = layoutHash(id) * 2 * Math.PI;
+    positions.set(id, { x: initialRadius * Math.cos(angle), y: initialRadius * Math.sin(angle) });
+  });
+
+  const k = LAYOUT_LINK_DISTANCE;
+  let temperature = LAYOUT_LINK_DISTANCE * 0.6;
+  const cooling = temperature / LAYOUT_MAX_ITERATIONS;
+
+  for (let iter = 0; iter < LAYOUT_MAX_ITERATIONS; iter++) {
+    const disp = new Map<string, LayoutPoint>();
+    ids.forEach((id) => disp.set(id, { x: 0, y: 0 }));
+
+    // Global repulsion — every pair pushes apart (inverse-linear in
+    // distance, standard FR repulsion). This is what spreads unrelated
+    // nodes out instead of letting them collapse together.
+    for (let a = 0; a < ids.length; a++) {
+      for (let b = a + 1; b < ids.length; b++) {
+        const pa = positions.get(ids[a])!;
+        const pb = positions.get(ids[b])!;
+        const dx = pa.x - pb.x;
+        const dy = pa.y - pb.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const force = (k * k) / dist;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        const da = disp.get(ids[a])!; da.x += fx; da.y += fy;
+        const db = disp.get(ids[b])!; db.x -= fx; db.y -= fy;
+      }
+    }
+
+    // Spring attraction along real edges only — this is what pulls
+    // connected nodes into a coherent cluster. No edge is invented here;
+    // this only consumes edges that were passed in.
+    for (const e of edges) {
+      const pa = positions.get(e.from);
+      const pb = positions.get(e.to);
+      if (!pa || !pb) continue;
+      const dx = pa.x - pb.x;
+      const dy = pa.y - pb.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const force = (dist * dist) / k;
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      const da = disp.get(e.from)!; da.x -= fx; da.y -= fy;
+      const db = disp.get(e.to)!; db.x += fx; db.y += fy;
+    }
+
+    // Integrate with a cooling cap on per-step displacement (FR's
+    // "temperature") so the simulation settles instead of oscillating
+    // forever.
+    let maxDisp = 0;
+    ids.forEach((id) => {
+      const d = disp.get(id)!;
+      const dist = Math.sqrt(d.x * d.x + d.y * d.y) || 0.0001;
+      const capped = Math.min(dist, temperature);
+      const p = positions.get(id)!;
+      p.x += (d.x / dist) * capped;
+      p.y += (d.y / dist) * capped;
+      maxDisp = Math.max(maxDisp, capped);
+    });
+    temperature = Math.max(0.01, temperature - cooling);
+
+    // Convergence check — stop iterating once nothing is moving
+    // meaningfully rather than always burning the full iteration budget.
+    if (maxDisp < LAYOUT_CONVERGENCE_EPSILON) break;
+  }
+
+  // Final collision-resolution pass: guarantees the hard minimum-distance
+  // requirement even where the spring/repulsion balance alone doesn't fully
+  // satisfy it (e.g. dense small components).
+  for (let pass = 0; pass < 6; pass++) {
+    let moved = false;
+    for (let a = 0; a < ids.length; a++) {
+      for (let b = a + 1; b < ids.length; b++) {
+        const pa = positions.get(ids[a])!;
+        const pb = positions.get(ids[b])!;
+        const dx = pb.x - pa.x;
+        const dy = pb.y - pa.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        if (dist < LAYOUT_MIN_GAP) {
+          const push = (LAYOUT_MIN_GAP - dist) / 2;
+          const ux = dx / dist;
+          const uy = dy / dist;
+          pa.x -= ux * push; pa.y -= uy * push;
+          pb.x += ux * push; pb.y += uy * push;
+          moved = true;
+        }
+      }
+    }
+    if (!moved) break;
+  }
+
+  return positions;
+}
+
+// Arranges each connected component's own internal layout (still produced
+// by layoutComponent's force simulation below) into an overall composition
+// centered on the single largest/most-connected component, instead of
+// shelf-packing every component into rows like a dashboard grid.
+//
+//   - the largest component is placed at the origin and becomes the visual
+//     center of gravity, exactly like the reference's hub-and-cluster feel
+//   - smaller connected components ("satellites") are placed on a ring
+//     immediately around it
+//   - fully isolated nodes (no real edges at all) go on a further-out ring
+//     around the whole composition — visibly peripheral, never mixed into
+//     the network, never stacked into a long column
+//   - a short deterministic pass nudges apart any components whose rings
+//     still overlap; it is a safety net, not the primary placement logic
+//
+// No relationship is fabricated here — this only decides where each
+// component (as computed by the real edge-based force simulation) sits
+// relative to the others.
+function arrangeComponents(
+  components: string[][],
+  edgesByComponent: Map<number, LayoutEdge[]>
+): { positions: Map<string, LayoutPoint>; bounds: { minX: number; minY: number; maxX: number; maxY: number } } {
+  const positions = new Map<string, LayoutPoint>();
+  if (components.length === 0) return { positions, bounds: { minX: 0, minY: 0, maxX: 0, maxY: 0 } };
+
+  const items = components.map((comp, idx) => {
+    const local = layoutComponent(comp, edgesByComponent.get(idx) ?? []);
+    let cx = 0, cy = 0;
+    local.forEach((p) => { cx += p.x; cy += p.y; });
+    cx /= local.size; cy /= local.size;
+    let radius = LAYOUT_MIN_GAP / 2;
+    local.forEach((p) => { radius = Math.max(radius, Math.hypot(p.x - cx, p.y - cy)); });
+    // Re-center this component's own local positions on (0,0) so it can be
+    // translated as a single rigid unit once its ring position is decided.
+    const centered = new Map<string, LayoutPoint>();
+    local.forEach((p, id) => centered.set(id, { x: p.x - cx, y: p.y - cy }));
+    return { idx, ids: comp, local: centered, radius, isIsolated: comp.length === 1 };
+  });
+
+  const main = items[0];
+  const satellites = items.slice(1).filter((it) => !it.isIsolated);
+  const isolates = items.slice(1).filter((it) => it.isIsolated);
+
+  const centers = new Map<number, LayoutPoint>();
+  centers.set(main.idx, { x: 0, y: 0 });
+
+  const ringGap = LAYOUT_COMPONENT_GAP;
+  const satelliteRingRadius = main.radius + ringGap;
+
+  satellites.forEach((item, i) => {
+    const angle = (i / satellites.length) * 2 * Math.PI;
+    const dist = satelliteRingRadius + item.radius;
+    centers.set(item.idx, { x: dist * Math.cos(angle), y: dist * Math.sin(angle) });
+  });
+
+  // Isolated nodes sit on their own ring, further out than every satellite —
+  // this is what keeps unrelated entities from crowding the actual network.
+  const satelliteOuterReach = satellites.reduce((max, item) => {
+    const c = centers.get(item.idx)!;
+    return Math.max(max, Math.hypot(c.x, c.y) + item.radius);
+  }, main.radius);
+  const isolateRingRadius = satelliteOuterReach + ringGap;
+
+  isolates.forEach((item, i) => {
+    // Half-slice offset from the satellite ring's angles is a fixed,
+    // deterministic cosmetic choice (not randomness) so an isolated node
+    // doesn't land in the exact radial shadow of a satellite component.
+    const angle = ((i + 0.5) / isolates.length) * 2 * Math.PI;
+    const dist = isolateRingRadius + item.radius;
+    centers.set(item.idx, { x: dist * Math.cos(angle), y: dist * Math.sin(angle) });
+  });
+
+  // Bounded relaxation pass: treat every item as a circle (its own bounding
+  // radius) and separate any pair that still overlaps. With items already
+  // placed on two clean rings this rarely has to move anything — it exists
+  // to handle unusual size distributions, not as the primary layout step.
+  // The main component (index 0 in placement order) stays anchored at the
+  // center; only the other item in a colliding pair yields.
+  for (let pass = 0; pass < 8; pass++) {
+    let moved = false;
+    for (let a = 0; a < items.length; a++) {
+      for (let b = a + 1; b < items.length; b++) {
+        const ca = centers.get(items[a].idx)!;
+        const cb = centers.get(items[b].idx)!;
+        const dx = cb.x - ca.x;
+        const dy = cb.y - ca.y;
+        const dist = Math.hypot(dx, dy) || 0.01;
+        const minDist = items[a].radius + items[b].radius + ringGap;
+        if (dist < minDist) {
+          const push = (minDist - dist) / 2;
+          const ux = dx / dist, uy = dy / dist;
+          if (a === 0) {
+            cb.x += ux * push * 2; cb.y += uy * push * 2;
+          } else {
+            ca.x -= ux * push; ca.y -= uy * push;
+            cb.x += ux * push; cb.y += uy * push;
+          }
+          moved = true;
+        }
+      }
+    }
+    if (!moved) break;
+  }
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  items.forEach((item) => {
+    const c = centers.get(item.idx)!;
+    item.local.forEach((p, id) => {
+      const gx = p.x + c.x;
+      const gy = p.y + c.y;
+      positions.set(id, { x: gx, y: gy });
+      minX = Math.min(minX, gx); maxX = Math.max(maxX, gx);
+      minY = Math.min(minY, gy); maxY = Math.max(maxY, gy);
+    });
+  });
+
+  if (!isFinite(minX)) { minX = minY = maxX = maxY = 0; }
+  return { positions, bounds: { minX, minY, maxX, maxY } };
+}
+
+// Top-level entry point: raw nodes/edges in, final { id -> {x,y} } out, plus
+// the bounding box so the viewport can be fit to whatever was computed.
+// Called from a useMemo keyed on the raw node/edge arrays — it only runs
+// when the graph data itself changes (a new fetch or investigation switch),
+// never on selection, filter, focus-mode, or risk-overlay toggles, and
+// never as part of the per-node/per-edge render loop.
+function computeGraphLayout(
+  nodes: { id: string; x?: number; y?: number }[],
+  edges: LayoutEdge[]
+): {
+  positions: Map<string, LayoutPoint>;
+  bounds: { minX: number; minY: number; maxX: number; maxY: number };
+} {
+  if (nodes.length === 0) return { positions: new Map(), bounds: { minX: 0, minY: 0, maxX: 0, maxY: 0 } };
+  // Large graphs are too expensive for the O(n²) force simulation.
+// The backend already provides deterministic coordinates, so use those
+// once the graph becomes large enough. This keeps the UI responsive.
+const LARGE_GRAPH_THRESHOLD = 250;
+
+if (nodes.length > LARGE_GRAPH_THRESHOLD) {
+  const positions = new Map<string, LayoutPoint>();
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  nodes.forEach((node, index) => {
+    // Prefer the backend coordinates.
+    // Fall back to a deterministic grid if either coordinate is missing.
+    const x = Number.isFinite(node.x)
+      ? node.x!
+      : (index % 20) * 80;
+
+    const y = Number.isFinite(node.y)
+      ? node.y!
+      : Math.floor(index / 20) * 80;
+
+    positions.set(node.id, { x, y });
+
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  });
+
+  return {
+    positions,
+    bounds: {
+      minX,
+      minY,
+      maxX,
+      maxY,
+    },
+  };
+}
+  const nodeIds = nodes.map((n) => n.id);
+  const validEdges = edges.filter((e) => e.from && e.to && e.from !== e.to);
+  const components = findConnectedComponents(nodeIds, validEdges);
+  const edgesByComponent = new Map<number, LayoutEdge[]>();
+  components.forEach((comp, i) => {
+    const compSet = new Set(comp);
+    edgesByComponent.set(i, validEdges.filter((e) => compSet.has(e.from) && compSet.has(e.to)));
+  });
+  return arrangeComponents(components, edgesByComponent);
+}
+
+// Dedicated compact layout for Focus Mode's 1-hop neighborhood: the
+// selected node at the center, its direct neighbors placed evenly around
+// it. Reusing the full-graph coordinates here would leave a small
+// neighborhood scattered across whatever space the full layout happened to
+// place it in — a fresh radial layout for just this subset is simpler and
+// safer than trying to make one force simulation serve both views. Only
+// ever consumes the selected node's real neighbor set — no relationship is
+// added or invented, and the neighbor set itself is untouched (still a
+// strict 1-hop neighborhood).
+function computeFocusLayout(centerId: string, neighborIds: string[]): Map<string, LayoutPoint> {
+  const positions = new Map<string, LayoutPoint>();
+  positions.set(centerId, { x: 0, y: 0 });
+  const n = neighborIds.length;
+  if (n === 0) return positions;
+  const radius = Math.max(LAYOUT_MIN_GAP, LAYOUT_LINK_DISTANCE);
+  // Deterministic angle offset derived from the center node's own id, so
+  // re-selecting the same node always reproduces the same arrangement.
+  const angleOffset = layoutHash(centerId) * 2 * Math.PI;
+  neighborIds.forEach((id, i) => {
+    const angle = angleOffset + (i / n) * 2 * Math.PI;
+    positions.set(id, { x: radius * Math.cos(angle), y: radius * Math.sin(angle) });
+  });
+  return positions;
+}
+
+// Fits a viewBox to a computed bounding box (with padding), clamped to the
+// same zoom limits the toolbar already respects — this is what keeps every
+// node inside the viewport on load instead of scattering some of them
+// outside the visible canvas. Optional overrides let Focus Mode use a
+// gentler floor/padding than the full-graph fit (see FOCUS_* constants
+// below) so zooming into a small or single-node neighborhood doesn't blow
+// it up to fill nearly the whole screen.
+function fitViewBox(
+  bounds: { minX: number; minY: number; maxX: number; maxY: number },
+  options?: { padding?: number; minSize?: number }
+) {
+  const padding = options?.padding ?? LAYOUT_PADDING;
+  const minSize = options?.minSize ?? MIN_VIEWBOX_SIZE;
+  const spanX = Math.max(bounds.maxX - bounds.minX, 0);
+  const spanY = Math.max(bounds.maxY - bounds.minY, 0);
+  const w = Math.min(MAX_VIEWBOX_SIZE, Math.max(minSize, spanX + padding * 2));
+  const h = Math.min(MAX_VIEWBOX_SIZE, Math.max(minSize, spanY + padding * 2));
+  const cx = (bounds.minX + bounds.maxX) / 2;
+  const cy = (bounds.minY + bounds.maxY) / 2;
+  return { x: cx - w / 2, y: cy - h / 2, w, h };
+}
+
+// Focus Mode's neighborhood is often tiny (sometimes a single isolated
+// node with zero neighbors), so it needs its own, larger floor than the
+// full-graph fit — otherwise fitViewBox clamps down to MIN_VIEWBOX_SIZE,
+// which crops in tight enough that one node's glow/label fills most of
+// the screen. These give a comfortably zoomed, not maximally zoomed, view.
+const FOCUS_MIN_VIEWBOX_SIZE = 420;
+const FOCUS_PADDING = 110;
 
 interface GraphScreenProps {
   navigate: (s: string, d?: any) => void;
@@ -47,18 +505,17 @@ export function GraphScreen({ navigate, investigationId }: GraphScreenProps) {
   const [riskOverlay, setRiskOverlay] = useState(true);
 const [focusMode, setFocusMode] = useState(true);
 const [mode, setMode] = useState<"entity" | "network">("entity");
-const [liveNodes, setLiveNodes] = useState<any[]>(
-  investigationId ? [] : graphNodes
-);
-const [liveEdges, setLiveEdges] = useState<any[]>(
-  investigationId ? [] : graphEdges
-);
+const [liveNodes, setLiveNodes] = useState<any[]>([]);
+const [liveEdges, setLiveEdges] = useState<any[]>([]);
 const [visibleTypes, setVisibleTypes] = useState<Set<string>>(
   new Set(ALL_TYPES)
 );
 
-// Investigation-scoped fetch state...
-const [loading, setLoading] = useState(!!investigationId);
+// Fetch state — shared by both the global graph (/api/graph) and the
+// investigation-scoped graph (/api/investigations/:id/graph). Neither path
+// falls back to mock data on failure or on an empty response; both clear
+// liveNodes/liveEdges explicitly so the screen never keeps stale data.
+const [loading, setLoading] = useState(true);
 const [error, setError] = useState<string | null>(null);
 const [meta, setMeta] = useState<any | null>(null);
 
@@ -67,10 +524,9 @@ useEffect(() => {
   setSelectedEdgeKey(null);
   setError(null);
   setMeta(null);
+  setLoading(true);
 
   if (investigationId) {
-    setLoading(true);
-
     apiGet<any>(`/api/investigations/${investigationId}/graph`)
       .then((data) => {
         setMeta(data);
@@ -87,23 +543,89 @@ useEffect(() => {
     return;
   }
 
-  setLoading(false);
-
   apiGet<any>("/api/graph")
-  .then(({ nodes, edges }) => {
-    if (nodes?.length) setLiveNodes(nodes.map(normalizeNode));
-    if (edges?.length) setLiveEdges(edges.map(normalizeEdge));
-  })
-  .catch(() => {
-    // Keep existing/mock data on failure.
-  });
+    .then(({ nodes, edges }) => {
+      // Explicit replace, not a length-gated merge — an empty API response
+      // must clear whatever graph was previously shown, not leave it in place.
+      setLiveNodes((nodes ?? []).map(normalizeNode));
+      setLiveEdges((edges ?? []).map(normalizeEdge));
+    })
+    .catch((err) => {
+      setError(err.message ?? "Unable to load graph.");
+      setLiveNodes([]);
+      setLiveEdges([]);
+    })
+    .finally(() => setLoading(false));
 }, [investigationId]);
+
+  // ─── Type filter, applied BEFORE layout ─────────────────────────────────
+  // Previously the layout ran once on the full, unfiltered graph, and the
+  // type filter was applied afterward on top of those positions — so hiding
+  // a node type left the remaining visible nodes sitting wherever the FULL
+  // graph's force simulation had put them, gaps and all. Filtering first
+  // means the layout only ever sees the nodes that will actually be drawn.
+  const typeFilteredNodes = useMemo(
+    () => liveNodes.filter((n) => visibleTypes.has(n.type)),
+    [liveNodes, visibleTypes]
+  );
+  const typeFilteredNodeIds = useMemo(
+    () => new Set(typeFilteredNodes.map((n) => n.id)),
+    [typeFilteredNodes]
+  );
+  // Filtered edges must still contain only visible endpoints.
+  const typeFilteredEdges = useMemo(
+    () =>
+      liveEdges.filter(
+        (e) =>
+          typeFilteredNodeIds.has(e.from ?? e.fromId) &&
+          typeFilteredNodeIds.has(e.to ?? e.toId)
+      ),
+    [liveEdges, typeFilteredNodeIds]
+  );
+
+  // ─── Deterministic layout ────────────────────────────────────────────────
+  // Recomputed whenever the VISIBLE graph changes — a new fetch, an
+  // investigation switch, or a type-filter toggle — so a filtered view is
+  // always re-centered and compacted for exactly the subset being shown,
+  // never left as a crop of the full-graph layout. Not recomputed on
+  // selection, focus-mode, or risk-overlay toggles, which don't change what
+  // set of nodes/edges is visible.
+  const { positions: layoutPositions, bounds: layoutBounds } = useMemo(
+    () =>
+      computeGraphLayout(
+        typeFilteredNodes,
+        typeFilteredEdges.map((e) => ({ from: e.from ?? e.fromId, to: e.to ?? e.toId }))
+      ),
+    [typeFilteredNodes, typeFilteredEdges]
+  );
+
+  // Same (already type-filtered) nodes, positions swapped for the computed
+  // layout. Every other field (id, type, risk, label, alias...) passes
+  // through untouched — this never mutates liveNodes, so the raw API
+  // response shape is unaffected.
+  const positionedNodes = useMemo(
+    () =>
+      typeFilteredNodes.map((n) => {
+        const p = layoutPositions.get(n.id);
+        return p ? { ...n, x: p.x, y: p.y } : n;
+      }),
+    [typeFilteredNodes, layoutPositions]
+  );
 
   // ─── Zoom / pan (Phase 6) ────────────────────────────────────────────────
   const [viewBox, setViewBox] = useState(DEFAULT_VIEWBOX);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragState = useRef<{ startX: number; startY: number; startViewBox: typeof DEFAULT_VIEWBOX } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Fit the viewport to whatever the layout just computed. Only fires when
+  // layoutBounds itself changes (i.e. new graph data), so it never fights
+  // with a user's manual pan/zoom in between loads.
+  useEffect(() => {
+    if (liveNodes.length === 0) return;
+    setViewBox(fitViewBox(layoutBounds));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutBounds]);
 
   const zoomBy = useCallback((factor: number) => {
     setViewBox((vb) => {
@@ -114,7 +636,7 @@ useEffect(() => {
       return { x: cx - newW / 2, y: cy - newH / 2, w: newW, h: newH };
     });
   }, []);
-  const resetView = useCallback(() => setViewBox(DEFAULT_VIEWBOX), []);
+  const resetView = useCallback(() => setViewBox(fitViewBox(layoutBounds)), [layoutBounds]);
 
   const onSvgMouseDown = (e: React.MouseEvent) => {
     if (e.target !== svgRef.current && (e.target as HTMLElement).tagName !== "rect") return; // only drag on empty background
@@ -140,9 +662,13 @@ useEffect(() => {
     });
   };
 
-  const filteredNodes = liveNodes.filter((n) => visibleTypes.has(n.type));
-  const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
-  const filteredEdges = liveEdges.filter((e) => filteredNodeIds.has(e.from) && filteredNodeIds.has(e.to));
+  // positionedNodes/typeFilteredEdges above are already restricted to
+  // visibleTypes (filtering now happens before layout — see above), so
+  // these are just the post-layout aliases the rest of the render logic
+  // already expects.
+  const filteredNodes = positionedNodes;
+  const filteredNodeIds = typeFilteredNodeIds;
+  const filteredEdges = typeFilteredEdges;
 
 const selNode = filteredNodes.find(n => n.id === selected);
 
@@ -174,8 +700,55 @@ const renderedEdges = isFocused
   ? connectedEdges
   : filteredEdges;
 
+// Dedicated compact layout for the focused neighborhood (Part 10): the
+// full-graph coordinates above were never designed to make a small 1-hop
+// slice of the graph look good on its own, so Focus Mode gets its own tiny
+// radial layout instead — selected node at the center, its real neighbors
+// (and only its real neighbors) placed evenly around it.
+const focusNeighborIds = isFocused
+  ? Array.from(connectedIds).filter(id => id !== selected).sort()
+  : [];
+const focusPositions =
+  isFocused && selected ? computeFocusLayout(selected, focusNeighborIds) : null;
+
+// Nodes as actually drawn: full-graph coordinates, swapped for the focus
+// layout's coordinates when Focus Mode is showing a neighborhood. Leaves
+// positionedNodes/liveNodes themselves untouched.
+const displayNodes = renderedNodes.map((n) => {
+  const p = focusPositions?.get(n.id);
+  return p ? { ...n, x: p.x, y: p.y } : n;
+});
+
+// Focus-mode viewport fit: fits to the dedicated focus layout's own bounds
+// (computed above) rather than the full-graph layout bounds, so a small
+// neighborhood actually reads as compact instead of just being a crop of
+// wherever the full graph happened to place those nodes. Only refits on
+// entering/updating/leaving an actual focus (tracked via focusedRef), so
+// normal node selection with Focus Mode off never fights the user's manual
+// pan/zoom. Restores the full-graph fit when focus is left.
+const focusedRef = useRef(false);
+useEffect(() => {
+  if (isFocused && focusPositions) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    focusPositions.forEach((p) => {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    });
+    if (isFinite(minX)) {
+      setViewBox(fitViewBox({ minX, minY, maxX, maxY }, { padding: FOCUS_PADDING, minSize: FOCUS_MIN_VIEWBOX_SIZE }));
+    }
+    focusedRef.current = true;
+  } else if (focusedRef.current) {
+    setViewBox(fitViewBox(layoutBounds));
+    focusedRef.current = false;
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [isFocused, selected]);
+
+// Position lookup used for edge endpoints — same focus-layout override as
+// displayNodes, so edges connect to where the nodes are actually drawn.
 const getPos = (id: string) =>
-  liveNodes.find(n => n.id === id) || { x: 0, y: 0 };
+  focusPositions?.get(id) ?? positionedNodes.find(n => n.id === id) ?? { x: 0, y: 0 };
 
 const investigationScoped = !!investigationId;
 
@@ -340,6 +913,22 @@ if (liveNodes.length === 0) {
   const mx = (f.x + t.x) / 2;
   const my = (f.y + t.y) / 2;
 
+  // Push the label off the line itself (perpendicular offset) rather than
+  // stamping it at the raw midpoint. On a short, steep edge — exactly what
+  // Focus Mode zooms into — the midpoint sits almost on top of one of the
+  // endpoint nodes' own label pills, since those pills are drawn directly
+  // below each node on the same line the edge follows. Offsetting sideways
+  // moves the edge label off that shared vertical/near-vertical axis.
+  const dx = t.x - f.x;
+  const dy = t.y - f.y;
+  const edgeLen = Math.sqrt(dx * dx + dy * dy) || 1;
+  const EDGE_LABEL_OFFSET = 13;
+  const px = (-dy / edgeLen) * EDGE_LABEL_OFFSET;
+  const py = (dx / edgeLen) * EDGE_LABEL_OFFSET;
+  const labelX = mx + px;
+  const labelY = my + py;
+  const labelWidth = Math.max(30, (edge.label?.length ?? 0) * 4.4);
+
   return (
     <g
       key={key}
@@ -368,8 +957,8 @@ if (liveNodes.length === 0) {
         y2={t.y}
         stroke={
           isHighlighted
-            ? "rgba(99,102,241,0.55)"
-            : "rgba(255,255,255,0.07)"
+            ? "rgba(99,102,241,0.65)"
+            : "rgba(255,255,255,0.20)"
         }
         strokeWidth={isHighlighted ? 1.5 : 1}
         strokeDasharray={isHighlighted ? "none" : "5 4"}
@@ -382,25 +971,43 @@ if (liveNodes.length === 0) {
         }
       />
 
-      {/* Only show labels for relevant edges in focus mode */}
-      {(isHighlighted || isFocused) && (
-        <text
-          x={mx}
-          y={my - 5}
-          textAnchor="middle"
-          fill="rgba(255,255,255,0.45)"
-          fontSize="7.5"
-          fontFamily="Inter,sans-serif"
-        >
-          {edge.label}
-        </text>
+      {/* Normal full-graph view stays clean with labels hidden by default;
+          a label only appears for the specific edge the user selected, or
+          for every edge in the (already small) focused neighborhood. Just
+          selecting a node — without selecting one of its edges — no longer
+          pops open every label around it. */}
+      {(isFocused || selectedEdgeKey === key) && edge.label && (
+        <>
+          {/* Background pill so the label stays legible over nodes, other
+              edges, or a node's own label pill sitting nearby. */}
+          <rect
+            x={labelX - labelWidth / 2}
+            y={labelY - 10}
+            width={labelWidth}
+            height={13}
+            rx={3}
+            fill="rgba(8,10,18,0.75)"
+            style={{ pointerEvents: "none" }}
+          />
+          <text
+            x={labelX}
+            y={labelY}
+            textAnchor="middle"
+            fill="rgba(255,255,255,0.75)"
+            fontSize="7.5"
+            fontFamily="Inter,sans-serif"
+            style={{ pointerEvents: "none" }}
+          >
+            {edge.label}
+          </text>
+        </>
       )}
     </g>
   );
 })}
 
         {/* Nodes */}
-{renderedNodes.map((n, i) => {
+{displayNodes.map((n, i) => {
   const color = typeColors[n.type];
   const isSel = n.id === selected;
 
@@ -410,9 +1017,28 @@ if (liveNodes.length === 0) {
     !connectedIds.has(n.id) &&
     n.id !== selected;
 
-  const r = riskOverlay
-    ? 10 + (n.risk / 100) * 12
-    : 13;
+  // Entity Risk mode reads each node's own individual risk (n.risk, as
+  // before). Network Risk mode reads n.networkRisk instead — the real
+  // aggregate computed risk of the criminal Network an entity belongs to
+  // (attached by GET /api/graph, same value NetworkRiskScreen shows) — so
+  // the two toggle states now genuinely differ instead of both drawing
+  // from n.risk. Non-entity nodes (market/listing/wallet/txn) never belong
+  // to a Network, and an entity outside any tracked network has none
+  // either — both cases correctly fall through to null. Nothing here is
+  // invented: networkRisk is either the API's real value or absent.
+  const modeRisk = mode === "network" ? n.networkRisk : n.risk;
+
+  // A missing/non-numeric risk value (e.g. a node type that doesn't carry a
+  // computed score in the current mode) is represented as null — never
+  // fabricated. Previously this produced NaN (radius broke silently); it
+  // must not become a made-up score either.
+  const safeRisk = Number.isFinite(modeRisk) ? Math.min(100, Math.max(0, modeRisk)) : null;
+  // Base radius in the 13–16 unit range asked for, with a tighter risk-driven
+  // spread (12–18) than before so high-risk nodes still read as bigger
+  // without the overall graph feeling wildly uneven in scale.
+  const r = riskOverlay && safeRisk !== null
+    ? 12 + (safeRisk / 100) * 6
+    : 14;
 
   return (
     <g
@@ -434,6 +1060,25 @@ if (liveNodes.length === 0) {
           opacity: isDimmed ? 0.2 : 1,
         }}
       />
+
+      {/* Network Risk mode ring — the same graph-only treatment used for
+          selection/investigation-scope rings, applied here so a node whose
+          size/color just changed to reflect its NETWORK's risk (rather than
+          its own) reads as visibly different from Entity Risk mode, not
+          just numerically different in a value the user has to look up. */}
+      {mode === "network" && safeRisk !== null && (
+        <circle
+          cx={n.x}
+          cy={n.y}
+          r={r + 8}
+          fill="none"
+          stroke={riskColorLight(safeRisk)}
+          strokeWidth="1.25"
+          strokeOpacity={isDimmed ? 0.25 : 0.55}
+        >
+          <title>Network risk: {safeRisk}</title>
+        </circle>
+      )}
 
       {/* Selection ring */}
       {isSel && (
@@ -478,52 +1123,72 @@ if (liveNodes.length === 0) {
         }}
       />
 
-      {/* Icon */}
-      <text
-        x={n.x}
-        y={n.y + 4}
-        textAnchor="middle"
-        fill="rgba(255,255,255,0.95)"
-        fontSize="11"
-        style={{
-          userSelect: "none",
-          pointerEvents: "none",
-        }}
-      >
-        {typeIcons[n.type]}
-      </text>
-
-      {/* Label */}
-      <text
-        x={n.x}
-        y={n.y + r + 14}
-        textAnchor="middle"
-        fill={
-          isSel
-            ? "var(--text-1)"
-            : "rgba(255,255,255,0.38)"
-        }
-        fontSize="9"
-        fontFamily="Inter,sans-serif"
-        style={{ transition: "fill 0.2s" }}
-      >
-        {n.label}
-      </text>
-
-      {/* Risk label */}
-      {riskOverlay && (
+      {/* Icon + label + risk value — grouped so dimming (non-selected nodes
+          while something else is selected) is consistent across all three,
+          matching the dimmed main circle instead of staying full-bright. */}
+      <g opacity={isDimmed ? 0.35 : 1} style={{ transition: "opacity 0.2s" }}>
+        {/* Icon */}
         <text
           x={n.x}
-          y={n.y + r + 24}
+          y={n.y + 4}
           textAnchor="middle"
-          fill={riskColorLight(n.risk)}
-          fontSize="8"
-          fontFamily="JetBrains Mono,monospace"
-          fontWeight="600"
+          fill="rgba(255,255,255,0.95)"
+          fontSize="11"
+          style={{
+            userSelect: "none",
+            pointerEvents: "none",
+          }}
         >
-          {n.risk}
+          {typeIcons[n.type]}
         </text>
-      )}
+
+        {/* Label background — a soft pill behind the text keeps labels
+            readable when nodes/edges sit close together, without needing a
+            full text-collision engine. Width is an approximation from
+            character count (no DOM text measurement available here), which
+            is enough margin for legibility purposes. */}
+        <rect
+          x={n.x - Math.max(20, n.label.length * 3.0)}
+          y={n.y + r + 3}
+          width={Math.max(40, n.label.length * 6.0)}
+          height={16}
+          rx={4}
+          fill="rgba(8,10,18,0.65)"
+          style={{ pointerEvents: "none" }}
+        />
+
+        {/* Label */}
+        <text
+          x={n.x}
+          y={n.y + r + 15}
+          textAnchor="middle"
+          fill={
+            isSel
+              ? "var(--text-1)"
+              : "rgba(255,255,255,0.82)"
+          }
+          fontSize="10.5"
+          fontFamily="Inter,sans-serif"
+          style={{ transition: "fill 0.2s" }}
+        >
+          {n.label}
+        </text>
+
+        {/* Risk value */}
+        {riskOverlay && (
+          <text
+            x={n.x}
+            y={n.y + r + 27}
+            textAnchor="middle"
+            fill={safeRisk !== null ? riskColorLight(safeRisk) : "var(--text-4)"}
+            fontSize="8.5"
+            fontFamily="JetBrains Mono,monospace"
+            fontWeight="600"
+          >
+            {safeRisk !== null ? safeRisk : "—"}
+          </text>
+        )}
+      </g>
     </g>
   );
 })}
@@ -538,6 +1203,16 @@ if (liveNodes.length === 0) {
             <div style={{ fontSize: 9.5, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: "0.09em", marginBottom: 6 }}>{selNode.type.toUpperCase()} NODE</div>
             <div className="display" style={{ fontSize: 17, fontWeight: 700, color: "var(--text-1)", marginBottom: 8 }}>{selNode.label}</div>
             <RiskBadge score={selNode.risk} />
+            {/* Network Risk mode supplement: the entity risk badge above is
+                unchanged (Problem 2 asks to preserve the current
+                entity/node visualization), this just adds the real
+                network-level number alongside it when that mode is active
+                and the node actually has one. */}
+            {mode === "network" && Number.isFinite(selNode.networkRisk) && (
+              <div style={{ fontSize: 10.5, color: "var(--text-4)", marginTop: 6 }}>
+                Network risk: <span style={{ color: "var(--text-1)", fontWeight: 600 }}>{selNode.networkRisk}</span>
+              </div>
+            )}
           </div>
 
           <div style={{ display: "flex", justifyContent: "center" }}>
