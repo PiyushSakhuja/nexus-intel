@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { getIo } from "../sockets/io.js";
 import { generateInvestigationAssessment } from "../lib/investigationAssessment.js";
 import { DEFAULT_MODEL, MODEL_OPTIONS, type SupportedModel } from "../lib/llmClient.js";
+import { buildInvestigationDetailExtras } from "../lib/investigationDetail.js";
 import { computeVendorRisk, type VendorRisk } from "../lib/vendorRisk.js";
 import { computeEntityRisk, type EntityComputedRisk } from "../lib/entityRisk.js";
 import type { ListingInput } from "../lib/riskEngine.js";
@@ -169,6 +170,13 @@ investigationsRouter.delete("/:displayId/entities/:entityId", async (req, res) =
   res.status(204).send();
 });
 
+// GET /api/investigations/:displayId — the single Investigation Detail
+// API: everything the Investigation Workspace needs for one case, in one
+// response. Entities/evidence/timeline/aiAssessments/notes/network were
+// already real (see lib/investigationDetail.ts header for why); `wallets`,
+// `listings`, `risk`, and `riskFactors` are added below via
+// buildInvestigationDetailExtras rather than left for the frontend to
+// assemble from separate /api/wallets, /api/listings, etc. calls.
 // GET /api/investigations/:displayId/graph — investigation-SCOPED subgraph.
 //
 // Derives the subgraph purely from existing, persisted relationships:
@@ -286,19 +294,47 @@ investigationsRouter.get("/:displayId", async (req, res) => {
   const inv = await prisma.investigation.findUnique({
     where: { displayId: req.params.displayId },
     include: {
-      entities: { include: { entity: true } },
+      entities: {
+        include: {
+          entity: {
+            include: {
+              network: true,
+              alertLinks: { include: { alert: true } },
+            },
+          },
+        },
+      },
       evidence: true,
       timeline: { orderBy: { occurredAt: "asc" } },
       aiAssessments: { orderBy: { createdAt: "desc" } },
       notes: { orderBy: { createdAt: "desc" }, include: { revisions: { orderBy: { supersededAt: "desc" } } } },
-      network: true,
+      network: { include: { riskPoints: { orderBy: { recordedAt: "asc" } }, alerts: true } },
     },
   });
   if (!inv) return res.status(404).json({ error: "Investigation not found" });
+const linkedEntities = inv.entities.map((ie) => ie.entity);
 
-  const entityRiskContributors = await computeEntityRiskContributors(inv.entities);
+const extras = await buildInvestigationDetailExtras({
+  investigation: inv,
+  network: inv.network,
+  linkedEntities,
+  evidence: inv.evidence.map((e) => ({ status: e.status })),
+  timeline: inv.timeline.map((t) => ({ type: t.type })),
+});
 
-  res.json({ ...inv, entityRiskContributors });
+const entityRiskContributors =
+  await computeEntityRiskContributors(inv.entities);
+
+res.json({
+  ...inv,
+  entities: extras.entities,
+  wallets: extras.wallets,
+  listings: extras.listings,
+  risk: extras.risk,
+  riskFactors: extras.riskFactors,
+  riskFactorsSource: extras.riskFactorsSource,
+  entityRiskContributors,
+});
 });
 
 // POST /api/investigations/:displayId/ai-assessment

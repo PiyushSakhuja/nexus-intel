@@ -1,15 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
-  riskColorLight,
-  entities as mockEntities, graphNodes, graphEdges,
+  AreaChart, Area, LineChart, Line, BarChart, Bar,
+  PieChart, Pie, Cell, XAxis, YAxis,
+  CartesianGrid, Tooltip, ResponsiveContainer,
+} from "recharts";
+import {
+  riskColor, riskColorLight, riskLabel, riskBg, riskBorder,
+  activityTimeline, riskDistribution, networkRiskEvolution,
+  alertsByDay, entityTypeDist, sourceContrib, walletClusterData,
+  kpis, alerts, emergingNetworks, listings, wallets,
+  investigations, evidenceRecords, graphNodes, graphEdges,
+  auditLog, flagContributions, networkSignals, caseTimeline,
+  type Entity, type Alert, type Investigation, type EvidenceRecord,
 } from "../data";
 import {
   RingScore, RiskBadge,
 } from "../components/shared";
-
-// Kept so every screen still reading the hardcoded demo array works
-// unchanged; only screens explicitly wired to the API override this.
-const entities = mockEntities;
 
 const DEFAULT_VIEWBOX = { x: 0, y: 0, w: 900, h: 620 };
 const MIN_VIEWBOX_SIZE = 220; // most zoomed-in
@@ -19,6 +25,11 @@ const ZOOM_FACTOR = 1.25;
 const typeColors: Record<string, string> = { entity: "#6366f1", market: "#8b5cf6", listing: "#d97706", wallet: "#06b6d4", comm: "#16a34a", txn: "#ea580c" };
 const typeIcons: Record<string, string> = { entity: "◈", market: "▤", listing: "▣", wallet: "◇", comm: "◉", txn: "◫" };
 const ALL_TYPES = Object.keys(typeColors);
+const toolbarIconStyle: React.CSSProperties = {
+  background: "none", border: "none", color: "var(--text-3)", cursor: "pointer",
+  padding: "5px 8px", borderRadius: 5, fontSize: 16, transition: "color 0.12s",
+};
+
 
 interface GraphScreenProps {
   navigate: (s: string, d?: any) => void;
@@ -33,18 +44,22 @@ export function GraphScreen({ navigate, investigationId }: GraphScreenProps) {
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
   const [riskOverlay, setRiskOverlay] = useState(true);
-  const [mode, setMode] = useState<"entity" | "network">("entity");
-  const [liveNodes, setLiveNodes] = useState<any[]>(investigationId ? [] : graphNodes);
-  const [liveEdges, setLiveEdges] = useState<any[]>(investigationId ? [] : graphEdges);
-  const [visibleTypes, setVisibleTypes] = useState<Set<string>>(new Set(ALL_TYPES));
+const [focusMode, setFocusMode] = useState(true);
+const [mode, setMode] = useState<"entity" | "network">("entity");
+const [liveNodes, setLiveNodes] = useState<any[]>(
+  investigationId ? [] : graphNodes
+);
+const [liveEdges, setLiveEdges] = useState<any[]>(
+  investigationId ? [] : graphEdges
+);
+const [visibleTypes, setVisibleTypes] = useState<Set<string>>(
+  new Set(ALL_TYPES)
+);
 
-  // Investigation-scoped fetch state — kept separate from the global graph's
-  // existing (silent mock-fallback) behavior. Never falls back to mock/demo
-  // data on failure (Phase 9): shows an explicit loading/error/empty state
-  // instead.
-  const [loading, setLoading] = useState(!!investigationId);
-  const [error, setError] = useState<string | null>(null);
-  const [meta, setMeta] = useState<any | null>(null); // investigation-graph response metadata (calculable/explanation/entitiesWithoutGraphNode/...)
+// Investigation-scoped fetch state...
+const [loading, setLoading] = useState(!!investigationId);
+const [error, setError] = useState<string | null>(null);
+const [meta, setMeta] = useState<any | null>(null);
 
   useEffect(() => {
     setSelected(investigationId ? null : "wallet-w1");
@@ -130,10 +145,35 @@ export function GraphScreen({ navigate, investigationId }: GraphScreenProps) {
   const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
   const filteredEdges = liveEdges.filter((e) => filteredNodeIds.has(e.from) && filteredNodeIds.has(e.to));
 
-  const selNode = filteredNodes.find(n => n.id === selected);
-  const connectedEdges = filteredEdges.filter(e => e.from === selected || e.to === selected);
-  const connectedIds = new Set(connectedEdges.flatMap(e => [e.from, e.to]));
-  const selEdge = selectedEdgeKey ? filteredEdges.find((e, i) => edgeKey(e, i) === selectedEdgeKey) : null;
+const selNode = filteredNodes.find(n => n.id === selected);
+
+const connectedEdges = filteredEdges.filter(
+  e => e.from === selected || e.to === selected
+);
+
+const connectedIds = new Set(
+  connectedEdges.flatMap(e => [e.from, e.to])
+);
+
+const selEdge = selectedEdgeKey
+  ? filteredEdges.find(
+      (e, i) => edgeKey(e, i) === selectedEdgeKey
+    )
+  : null;
+
+// Focus mode: when a node is selected, render only that node and its
+// direct neighborhood instead of the full graph.
+const isFocused = focusMode && !!selected;
+
+const renderedNodes = isFocused
+  ? filteredNodes.filter(
+      n => n.id === selected || connectedIds.has(n.id)
+    )
+  : filteredNodes;
+
+const renderedEdges = isFocused
+  ? connectedEdges
+  : filteredEdges;
 
   const getPos = (id: string) => liveNodes.find(n => n.id === id) || { x: 0, y: 0 };
 
@@ -166,6 +206,12 @@ export function GraphScreen({ navigate, investigationId }: GraphScreenProps) {
             <span style={{ fontSize: 11, color: "var(--text-3)" }}>Risk Overlay</span>
             <div className={`toggle-track ${riskOverlay ? "on" : "off"}`} onClick={() => setRiskOverlay(!riskOverlay)} style={{ cursor: "pointer" }}>
               <div className="toggle-thumb" />
+            </div>
+          </div>
+          <div className="glass" style={{borderRadius:9,padding:"5px 12px",display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:11,color:"var(--text-3)"}} title="When on, selecting a node shows only that node and its direct connections instead of the entire graph">Focus Mode</span>
+            <div className={`toggle-track ${focusMode?"on":"off"}`} onClick={()=>setFocusMode(!focusMode)} style={{cursor:"pointer"}}>
+              <div className="toggle-thumb"/>
             </div>
           </div>
           <div className="glass" style={{ borderRadius: 9, padding: "4px", display: "flex" }}>
@@ -248,66 +294,215 @@ export function GraphScreen({ navigate, investigationId }: GraphScreenProps) {
             </defs>
             <rect x={viewBox.x - 200} y={viewBox.y - 200} width={viewBox.w + 400} height={viewBox.h + 400} fill="url(#g-bg)" />
 
-            {/* Edges */}
-            {filteredEdges.map((edge, i) => {
-              const f = getPos(edge.from); const t = getPos(edge.to);
-              const key = edgeKey(edge, i);
-              const isHighlighted = (selected && (edge.from === selected || edge.to === selected)) || selectedEdgeKey === key;
-              const mx = (f.x + t.x) / 2; const my = (f.y + t.y) / 2;
-              return (
-                <g key={key} style={{ cursor: "pointer" }} onClick={() => { setSelectedEdgeKey(key === selectedEdgeKey ? null : key); setSelected(null); }}>
-                  {/* Wide invisible hit-area so thin edges are easy to click */}
-                  <line x1={f.x} y1={f.y} x2={t.x} y2={t.y} stroke="transparent" strokeWidth={14} />
-                  <line x1={f.x} y1={f.y} x2={t.x} y2={t.y}
-                    stroke={isHighlighted ? "rgba(99,102,241,0.55)" : "rgba(255,255,255,0.07)"}
-                    strokeWidth={isHighlighted ? 1.5 : 1}
-                    strokeDasharray={isHighlighted ? "none" : "5 4"}
-                    style={isHighlighted ? {} : { animation: `dash-flow ${7 + i * 0.5}s linear infinite` }}
-                  />
-                  <text x={mx} y={my - 5} textAnchor="middle" fill="rgba(255,255,255,0.18)" fontSize="7.5" fontFamily="Inter,sans-serif">{edge.label}</text>
-                </g>
-              );
-            })}
+{/* Edges */}
+{renderedEdges.map((edge, i) => {
+  const f = getPos(edge.from);
+  const t = getPos(edge.to);
 
-            {/* Nodes */}
-            {filteredNodes.map((n, i) => {
-              const color = typeColors[n.type];
-              const isSel = n.id === selected;
-              const isDimmed = selected && !connectedIds.has(n.id) && n.id !== selected;
-              const r = riskOverlay ? 10 + (n.risk / 100) * 12 : 13;
-              return (
-                <g key={n.id} style={{ cursor: "pointer" }} onClick={() => { setSelected(n.id === selected ? null : n.id); setSelectedEdgeKey(null); }}>
-                  {/* Glow halo */}
-                  <circle cx={n.x} cy={n.y} r={r + 12} fill={`url(#g-${n.type})`}
-                    style={{ animation: `node-glow ${2.5 + i * 0.22}s ease-in-out infinite`, opacity: isDimmed ? 0.2 : 1 }} />
-                  {/* Selection ring */}
-                  {isSel && (
-                    <circle cx={n.x} cy={n.y} r={r + 5} fill="none" stroke={color} strokeWidth="1.5"
-                      strokeDasharray="4 3" style={{ animation: "dash-flow 3s linear infinite" }} />
-                  )}
-                  {/* Investigation-entity ring, when scoped */}
-                  {investigationScoped && n.isInvestigationEntity && !isSel && (
-                    <circle cx={n.x} cy={n.y} r={r + 4} fill="none" stroke={color} strokeWidth="1" strokeDasharray="2 3" opacity={0.7} />
-                  )}
-                  {/* Main node */}
-                  <circle cx={n.x} cy={n.y} r={r} fill={isSel ? color : `${color}cc`}
-                    stroke={isSel ? "rgba(255,255,255,0.6)" : color} strokeWidth={isSel ? 2 : 1}
-                    opacity={isDimmed ? 0.25 : 1}
-                    style={{ filter: `drop-shadow(0 0 ${isSel ? 10 : 5}px ${color}${isSel ? "bb" : "50"})`, transition: "all 0.2s" }} />
-                  {/* Icon */}
-                  <text x={n.x} y={n.y + 4} textAnchor="middle" fill="rgba(255,255,255,0.95)" fontSize="11" style={{ userSelect: "none", pointerEvents: "none" }}>{typeIcons[n.type]}</text>
-                  {/* Label */}
-                  <text x={n.x} y={n.y + r + 14} textAnchor="middle" fill={isSel ? "var(--text-1)" : "rgba(255,255,255,0.38)"} fontSize="9" fontFamily="Inter,sans-serif" style={{ transition: "fill 0.2s" }}>{n.label}</text>
-                  {/* Risk label */}
-                  {riskOverlay && (
-                    <text x={n.x} y={n.y + r + 24} textAnchor="middle" fill={riskColorLight(n.risk)} fontSize="8" fontFamily="JetBrains Mono,monospace" fontWeight="600">{n.risk}</text>
-                  )}
-                </g>
-              );
-            })}
-          </svg>
-        )}
-      </div>
+  // Keep the edge key consistent with the filtered graph so
+  // focus-mode rendering doesn't change the selected-edge identity.
+  const filteredIndex = filteredEdges.indexOf(edge);
+  const key = edgeKey(edge, filteredIndex >= 0 ? filteredIndex : i);
+
+  const isHighlighted =
+    (selected && (edge.from === selected || edge.to === selected)) ||
+    selectedEdgeKey === key;
+
+  const mx = (f.x + t.x) / 2;
+  const my = (f.y + t.y) / 2;
+
+  return (
+    <g
+      key={key}
+      style={{ cursor: "pointer" }}
+      onClick={() => {
+        setSelectedEdgeKey(
+          key === selectedEdgeKey ? null : key
+        );
+        setSelected(null);
+      }}
+    >
+      {/* Wide invisible hit-area so thin edges are easy to click */}
+      <line
+        x1={f.x}
+        y1={f.y}
+        x2={t.x}
+        y2={t.y}
+        stroke="transparent"
+        strokeWidth={14}
+      />
+
+      <line
+        x1={f.x}
+        y1={f.y}
+        x2={t.x}
+        y2={t.y}
+        stroke={
+          isHighlighted
+            ? "rgba(99,102,241,0.55)"
+            : "rgba(255,255,255,0.07)"
+        }
+        strokeWidth={isHighlighted ? 1.5 : 1}
+        strokeDasharray={isHighlighted ? "none" : "5 4"}
+        style={
+          isHighlighted
+            ? {}
+            : {
+                animation: `dash-flow ${7 + i * 0.5}s linear infinite`,
+              }
+        }
+      />
+
+      {/* Only show labels for relevant edges in focus mode */}
+      {(isHighlighted || isFocused) && (
+        <text
+          x={mx}
+          y={my - 5}
+          textAnchor="middle"
+          fill="rgba(255,255,255,0.45)"
+          fontSize="7.5"
+          fontFamily="Inter,sans-serif"
+        >
+          {edge.label}
+        </text>
+      )}
+    </g>
+  );
+})}
+
+        {/* Nodes */}
+{renderedNodes.map((n, i) => {
+  const color = typeColors[n.type];
+  const isSel = n.id === selected;
+
+  const isDimmed =
+    !isFocused &&
+    selected &&
+    !connectedIds.has(n.id) &&
+    n.id !== selected;
+
+  const r = riskOverlay
+    ? 10 + (n.risk / 100) * 12
+    : 13;
+
+  return (
+    <g
+      key={n.id}
+      style={{ cursor: "pointer" }}
+      onClick={() => {
+        setSelected(n.id === selected ? null : n.id);
+        setSelectedEdgeKey(null);
+      }}
+    >
+      {/* Glow halo */}
+      <circle
+        cx={n.x}
+        cy={n.y}
+        r={r + 12}
+        fill={`url(#g-${n.type})`}
+        style={{
+          animation: `node-glow ${2.5 + i * 0.22}s ease-in-out infinite`,
+          opacity: isDimmed ? 0.2 : 1,
+        }}
+      />
+
+      {/* Selection ring */}
+      {isSel && (
+        <circle
+          cx={n.x}
+          cy={n.y}
+          r={r + 5}
+          fill="none"
+          stroke={color}
+          strokeWidth="1.5"
+          strokeDasharray="4 3"
+          style={{ animation: "dash-flow 3s linear infinite" }}
+        />
+      )}
+
+      {/* Investigation-entity ring, when scoped */}
+      {investigationScoped && n.isInvestigationEntity && !isSel && (
+        <circle
+          cx={n.x}
+          cy={n.y}
+          r={r + 4}
+          fill="none"
+          stroke={color}
+          strokeWidth="1"
+          strokeDasharray="2 3"
+          opacity={0.7}
+        />
+      )}
+
+      {/* Main node */}
+      <circle
+        cx={n.x}
+        cy={n.y}
+        r={r}
+        fill={isSel ? color : `${color}cc`}
+        stroke={isSel ? "rgba(255,255,255,0.6)" : color}
+        strokeWidth={isSel ? 2 : 1}
+        opacity={isDimmed ? 0.25 : 1}
+        style={{
+          filter: `drop-shadow(0 0 ${isSel ? 10 : 5}px ${color}${isSel ? "bb" : "50"})`,
+          transition: "all 0.2s",
+        }}
+      />
+
+      {/* Icon */}
+      <text
+        x={n.x}
+        y={n.y + 4}
+        textAnchor="middle"
+        fill="rgba(255,255,255,0.95)"
+        fontSize="11"
+        style={{
+          userSelect: "none",
+          pointerEvents: "none",
+        }}
+      >
+        {typeIcons[n.type]}
+      </text>
+
+      {/* Label */}
+      <text
+        x={n.x}
+        y={n.y + r + 14}
+        textAnchor="middle"
+        fill={
+          isSel
+            ? "var(--text-1)"
+            : "rgba(255,255,255,0.38)"
+        }
+        fontSize="9"
+        fontFamily="Inter,sans-serif"
+        style={{ transition: "fill 0.2s" }}
+      >
+        {n.label}
+      </text>
+
+      {/* Risk label */}
+      {riskOverlay && (
+        <text
+          x={n.x}
+          y={n.y + r + 24}
+          textAnchor="middle"
+          fill={riskColorLight(n.risk)}
+          fontSize="8"
+          fontFamily="JetBrains Mono,monospace"
+          fontWeight="600"
+        >
+          {n.risk}
+        </text>
+      )}
+    </g>
+  );
+})}
+</svg>
+)}
+</div>
+</div>
+  );
 
       {/* Right panel — node details */}
       {selNode && (
@@ -379,43 +574,131 @@ export function GraphScreen({ navigate, investigationId }: GraphScreenProps) {
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            <button className="btn btn-primary" style={{ justifyContent: "center" }} onClick={() => navigate("entity", entities[0])}>View Full Profile</button>
-            <button className="btn btn-ghost" style={{ justifyContent: "center" }} onClick={() => navigate("network-risk")}>Network Risk Analysis</button>
-            <button className="btn btn-ghost" style={{ justifyContent: "center" }} onClick={() => navigate("workspace")}>Add to Investigation</button>
+  <button
+    className="btn btn-primary"
+    style={{
+      justifyContent: "center",
+      opacity: selNode.type === "entity" ? 1 : 0.5,
+      cursor: selNode.type === "entity" ? "pointer" : "not-allowed",
+    }}
+    disabled={selNode.type !== "entity"}
+    title={
+      selNode.type === "entity"
+        ? undefined
+        : "Full profile is only available for entity nodes"
+    }
+    onClick={() => {
+      if (selNode.type === "entity") {
+        navigate("entity", selNode);
+      }
+    }}
+  >
+    View Full Profile
+  </button>
+
+  <button
+    className="btn btn-ghost"
+    style={{ justifyContent: "center" }}
+    onClick={() => navigate("network-risk")}
+  >
+    Network Risk Analysis
+  </button>
+
+  <button
+    className="btn btn-ghost"
+    style={{ justifyContent: "center" }}
+    onClick={() => navigate("workspace")}
+  >
+    Add to Investigation
+  </button>
           </div>
         </div>
       )}
 
-      {/* Right panel — relationship (edge) details (Phase 6) */}
-      {!selNode && selEdge && (
-        <div className="anim-slide-r" style={{ width: 288, background: "var(--panel)", borderLeft: "1px solid var(--border)", padding: 20, overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
+            {!selNode && selEdge && (
+        <div
+          className="anim-slide-r"
+          style={{
+            width: 288,
+            background: "var(--panel)",
+            borderLeft: "1px solid var(--border)",
+            padding: 20,
+            overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: 14,
+          }}
+        >
           <div>
-            <div style={{ fontSize: 9.5, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: "0.09em", marginBottom: 6 }}>RELATIONSHIP</div>
-            <div className="display" style={{ fontSize: 16, fontWeight: 700, color: "var(--text-1)", marginBottom: 4 }}>{selEdge.label || "Unlabeled relationship"}</div>
+            <div
+              style={{
+                fontSize: 9.5,
+                color: "var(--text-4)",
+                textTransform: "uppercase",
+                letterSpacing: "0.09em",
+                marginBottom: 6,
+              }}
+            >
+              RELATIONSHIP
+            </div>
+
+            <div
+              className="display"
+              style={{
+                fontSize: 17,
+                fontWeight: 700,
+                color: "var(--text-1)",
+                marginBottom: 8,
+              }}
+            >
+              {selEdge.label || "Unlabeled relationship"}
+            </div>
           </div>
 
           {(() => {
-            const fromNode = liveNodes.find(n => n.id === selEdge.from);
-            const toNode = liveNodes.find(n => n.id === selEdge.to);
+            const fromNode = liveNodes.find(
+              n => n.id === selEdge.from
+            );
+
+            const toNode = liveNodes.find(
+              n => n.id === selEdge.to
+            );
+
             return (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <RelRow label="From" node={fromNode} onClick={() => { setSelected(fromNode?.id ?? null); setSelectedEdgeKey(null); }} />
-                <RelRow label="To" node={toNode} onClick={() => { setSelected(toNode?.id ?? null); setSelectedEdgeKey(null); }} />
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <RelRow
+                  label="From"
+                  node={fromNode}
+                  onClick={() => {
+                    setSelected(fromNode?.id ?? null);
+                    setSelectedEdgeKey(null);
+                  }}
+                />
+
+                <RelRow
+                  label="To"
+                  node={toNode}
+                  onClick={() => {
+                    setSelected(toNode?.id ?? null);
+                    setSelectedEdgeKey(null);
+                  }}
+                />
               </div>
             );
           })()}
 
-          {/* GraphEdge has no source/evidence column in the schema — stated
-              honestly rather than inventing one. If/when that's added, this
-              is where it would render. */}
-          <div style={{ fontSize: 10.5, color: "var(--text-4)", lineHeight: 1.5, padding: "8px 10px", background: "rgba(255,255,255,0.03)", borderRadius: 6 }}>
-            No separate evidence/source record is persisted for this relationship — only the relationship label and its two endpoints.
+          <div
+            style={{
+              fontSize: 10.5,
+              color: "var(--text-4)",
+              lineHeight: 1.5,
+            }}
+          >
+            No separate evidence/source record is persisted for this
+            relationship. The relationship is derived from the graph data.
           </div>
         </div>
       )}
-    </div>
-  );
-}
 
 function RelRow({ label, node, onClick }: { label: string; node: any; onClick: () => void }) {
   if (!node) return null;
@@ -442,12 +725,6 @@ function CenteredMessage({ title, detail }: { title: string; detail?: string }) 
     </div>
   );
 }
-
-const toolbarIconStyle: React.CSSProperties = {
-  background: "none", border: "none", color: "var(--text-3)", cursor: "pointer",
-  padding: "5px 8px", borderRadius: 5, fontSize: 16, transition: "color 0.12s",
-};
-
 // GraphNode.type comes back from Prisma as the enum ("ENTITY", "WALLET"...)
 // but typeColors/typeIcons above are keyed lowercase — without this every
 // node would render with undefined styling.
@@ -462,4 +739,5 @@ function normalizeEdge(e: any) {
 
 function edgeKey(edge: any, index: number) {
   return edge.id ?? `${edge.from}-${edge.to}-${index}`;
+}
 }
