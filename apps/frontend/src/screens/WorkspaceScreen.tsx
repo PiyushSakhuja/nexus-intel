@@ -263,7 +263,19 @@ export function WorkspaceScreen({
         description: data.description ?? "",
         relatedEntities: (data.entities ?? []).map((ie: any) => ie.entity),
         addedEvidence: Array.isArray(data.evidence) ? data.evidence : [],
-        latestAssessment: data.aiAssessments?.[0] ?? null,
+        // entityRiskContributors is now computed by GET /:displayId itself
+        // (recomputed from current Entity/Listing data via the same
+        // computeEntityRisk() used elsewhere — see routes/investigations.ts)
+        // so it's attached to latestAssessment here and survives a page
+        // refresh, instead of only existing right after a fresh POST.
+        latestAssessment: data.aiAssessments?.[0]
+          ? { ...data.aiAssessments[0], entityRiskContributors: data.entityRiskContributors ?? [] }
+          : null,
+        // Full history (not just the latest) — additive, kept only so the
+        // "why did this change?" panel below can show a real previous ->
+        // current delta from persisted AiAssessment rows. Nothing here is
+        // computed/estimated; it's the same array the API already returned.
+        assessmentHistory: Array.isArray(data.aiAssessments) ? data.aiAssessments : [],
       });
 
       if (!cancelled) {
@@ -639,6 +651,24 @@ export function WorkspaceScreen({
     assessment?.reviewStatus === "MODIFIED" && assessment?.editedExplanation
       ? assessment.editedExplanation
       : assessment?.explanation ?? "";
+
+  // ─── "Why did the score change?" (Person 2 / item H) ────────────────────
+  // Finds the immediately-previous persisted AiAssessment by createdAt,
+  // sorted explicitly here rather than trusting the API's return order
+  // (the backend does order by createdAt desc today, but this shouldn't
+  // silently break if that ever changes).
+  const sortedAssessmentHistory: any[] = [...(inv?.assessmentHistory ?? [])].sort(
+    (a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+  const currentIndexInHistory = sortedAssessmentHistory.findIndex((a: any) => a.id === assessment?.id);
+  const previousAssessment: any =
+    currentIndexInHistory !== -1
+      ? sortedAssessmentHistory[currentIndexInHistory + 1] ?? null
+      : sortedAssessmentHistory[0] ?? null;
+  const riskDelta: number | null =
+    assessment?.riskScore != null && previousAssessment?.riskScore != null
+      ? assessment.riskScore - previousAssessment.riskScore
+      : null;
 
   const recommendations: string[] = (() => {
     const raw =
@@ -1210,6 +1240,32 @@ export function WorkspaceScreen({
                   </div>
                 )}
 
+                {/* What changed — previous vs current, from persisted AiAssessment rows only */}
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 8, marginBottom: 12,
+                  padding: "8px 10px", background: "rgba(255,255,255,0.03)", borderRadius: 7,
+                }}>
+                  {previousAssessment ? (
+                    <>
+                      <span className="mono-sm" style={{ color: "var(--text-4)" }}>{previousAssessment.riskScore}</span>
+                      <span style={{ color: "var(--text-4)", fontSize: 11 }}>→</span>
+                      <span className="mono-sm" style={{ color: "var(--text-1)", fontWeight: 700 }}>{assessment.riskScore}</span>
+                      {riskDelta !== null && riskDelta !== 0 && (
+                        <span className="mono-sm" style={{ color: riskDelta > 0 ? "var(--critical-light, #f87171)" : "#10b981", marginLeft: 2 }}>
+                          {riskDelta > 0 ? "▲" : "▼"} {riskDelta > 0 ? "+" : ""}{riskDelta}
+                        </span>
+                      )}
+                      <span style={{ fontSize: 10.5, color: "var(--text-4)", marginLeft: "auto" }}>
+                        since {previousAssessment.createdAt ? new Date(previousAssessment.createdAt).toLocaleDateString() : "last assessment"}
+                      </span>
+                    </>
+                  ) : (
+                    <span style={{ fontSize: 11, color: "var(--text-4)" }}>
+                      This is the first recorded AI assessment for this investigation — no prior score to compare against.
+                    </span>
+                  )}
+                </div>
+
                 {assessment.reviewStatus === "MODIFIED" && assessment.editedExplanation && (
                   <div style={{ fontSize: 10, color: "var(--accent-hi)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
                     Edited by investigator
@@ -1242,6 +1298,66 @@ export function WorkspaceScreen({
                       </div>
                     ))}
                   </>
+                )}
+
+                {/* Per-entity contributor breakdown — real riskEngine factors,
+                    via computeEntityRisk. Present on both a freshly-run
+                    assessment (from the POST response) and one loaded from
+                    history on page load (GET /:displayId now recomputes the
+                    same breakdown from current Entity/Listing data — see
+                    routes/investigations.ts). Only genuinely empty when the
+                    investigation has no linked entities at all. */}
+                {Array.isArray(assessment.entityRiskContributors) && assessment.entityRiskContributors.length > 0 ? (
+                  <>
+                    <div className="divider" style={{ margin: "14px 0" }} />
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-1)", marginBottom: 10 }}>
+                      Which Entities Contributed
+                    </div>
+                    {assessment.entityRiskContributors.map((ec: any) => (
+                      <div key={ec.displayId ?? ec.alias} style={{ padding: "8px 9px", marginBottom: 6, background: "rgba(255,255,255,0.03)", borderRadius: 6 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: ec.contributors?.length ? 6 : 0 }}>
+                          <span style={{ fontSize: 11.5, color: "var(--text-2)", fontWeight: 500 }}>{ec.alias}</span>
+                          {ec.risk != null && <RiskBadge score={ec.risk} />}
+                        </div>
+                        {Array.isArray(ec.contributors) && ec.contributors.length > 0 && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                            {ec.contributors.map((c: any, i: number) => (
+                              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--text-4)" }}>
+                                <span>{c.label}</span>
+                                <span className="mono-sm">+{c.contribution}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {!ec.correlated && (
+                          <div style={{ fontSize: 10, color: "var(--text-4)", marginTop: 4, fontStyle: "italic" }}>
+                            {ec.explanation ?? "No correlated listing evidence for this entity yet."}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ width: "100%", justifyContent: "center", marginTop: 4 }}
+                      onClick={() => navigate("graph", inv.id)}
+                    >
+                      View Relationships in Graph
+                    </button>
+                    {/* Honest limitation, not a fabricated link: there's no
+                        persisted column tying a specific risk contributor to
+                        a specific EvidenceRecord/timeline entry, so this
+                        points at the existing sections on this same screen
+                        rather than inventing a per-signal citation. */}
+                    <div style={{ fontSize: 10, color: "var(--text-4)", marginTop: 8, lineHeight: 1.5 }}>
+                      For supporting evidence and events, see this investigation's
+                      Evidence and Timeline sections — the contributors above aren't
+                      yet linked to a specific evidence record.
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 10.5, color: "var(--text-4)", marginBottom: 4, fontStyle: "italic" }}>
+                    No entities are linked to this investigation yet, so no per-entity contributor breakdown is available.
+                  </div>
                 )}
 
                 {recommendations.length > 0 && (
@@ -1421,7 +1537,13 @@ export function WorkspaceScreen({
           <button className="btn btn-ghost" style={{ justifyContent: "center" }} onClick={() => navigate("timeline")}>
             View Investigation Timeline
           </button>
-          <button className="btn btn-ghost" style={{ justifyContent: "center" }} onClick={() => navigate("graph")}>
+          {/* Was navigate("graph") with no id, which always opened the
+              GLOBAL graph even from inside a specific investigation.
+              GraphScreen/App.tsx already support an investigation-scoped
+              graph (GET /api/investigations/:displayId/graph) — this just
+              passes the id through so this button actually opens THIS
+              investigation's subgraph instead of the unrelated global one. */}
+          <button className="btn btn-ghost" style={{ justifyContent: "center" }} onClick={() => navigate("graph", inv.id)}>
             View Network Graph
           </button>
         </div>

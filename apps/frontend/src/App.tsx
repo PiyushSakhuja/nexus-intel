@@ -33,6 +33,7 @@ export default function App() {
   const [entityData, setEntityData] = useState(entities[0]);
   const [workspaceDisplayId, setWorkspaceDisplayId] = useState<string | null>(null);
   const [networkDisplayId, setNetworkDisplayId] = useState<string | null>(null);
+  const [graphInvestigationId, setGraphInvestigationId] = useState<string | null>(null);
   const navigate = useCallback((s: string, data?: any) => {
     if (s === "entity" && data) {
       setEntityData(data);
@@ -47,6 +48,21 @@ export default function App() {
       if (displayId) {
         setWorkspaceDisplayId(displayId);
       }
+    }
+
+    if (s === "graph") {
+      // No `data` (or data with no investigationId) -> global graph, same
+      // as before. Passing a displayId string or { investigationId } scopes
+      // GraphScreen to that investigation. Reset (rather than leaving
+      // stale) whenever "graph" is navigated to without one, so clicking
+      // the sidebar's generic Graph link never keeps a previous
+      // investigation's scoping around.
+      const investigationId = data
+        ? typeof data === "string"
+          ? data
+          : data.investigationId ?? null
+        : null;
+      setGraphInvestigationId(investigationId);
     }
 
     if (s === "network-risk" && data) {
@@ -76,7 +92,7 @@ export default function App() {
       case "alerts": return <AlertsScreen navigate={navigate} />;
       case "entities": return <EntitiesScreen navigate={navigate} />;
       case "entity": return <EntityScreen entity={entityData} navigate={navigate} />;
-      case "graph": return <GraphScreen navigate={navigate} />;
+      case "graph": return <GraphScreen navigate={navigate} investigationId={graphInvestigationId} />;
       case "network-risk": return <NetworkRiskScreen navigate={navigate} displayId={networkDisplayId} />;
       case "listings": return <ListingsScreen />;
       case "blockchain": return <BlockchainScreen />;
