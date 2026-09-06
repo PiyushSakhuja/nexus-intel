@@ -388,18 +388,17 @@ export function InvestigationsScreen({ navigate }: { navigate:(s:string,d?:any)=
       {invError && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({invError}) — showing demo data.</p>}
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14}}>
         {invRows.map((inv,i)=>(
-          <div key={inv.id} className={`card card-hover anim-fade-up delay-${i+1}`} style={{padding:20,position:"relative",cursor:"pointer"}} onClick={()=>navigate("workspace",inv.id)}>
+          <div key={inv.id} className={`card card-hover anim-fade-up delay-${i+1} inv-card`} style={{padding:20,position:"relative",cursor:"pointer"}} onClick={()=>navigate("workspace",inv.id)}>
             {/* Delete button */}
             <button
-              className="icon-btn danger"
-              style={{ position:"absolute", top:10, right:10, fontSize:10, padding:"3px 7px", zIndex:2 }}
+              className="inv-delete-btn"
               onClick={e => { e.stopPropagation(); setDeleteTarget(inv); }}
               title="Delete investigation"
             >
-              🗑
+              <svg width="11" height="12" viewBox="0 0 11 12" fill="none"><path d="M1 3h9M3.5 3V2a1 1 0 011-1h2a1 1 0 011 1v1M4.5 5.5v3M6.5 5.5v3M2 3l.6 6.5a1 1 0 001 .9h3.8a1 1 0 001-.9L9 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
             </button>
 
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12,paddingRight:30}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12,paddingRight:28}}>
               <span className="mono-sm" style={{color:"var(--accent-hi)"}}>{inv.id}</span>
               <span className={`badge ${inv.priority==="CRITICAL"?"badge-critical":inv.priority==="HIGH"?"badge-high":inv.priority==="MEDIUM"?"badge-medium":"badge-low"}`}>{inv.priority}</span>
             </div>

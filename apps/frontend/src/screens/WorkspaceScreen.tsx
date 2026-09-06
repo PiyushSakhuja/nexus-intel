@@ -262,6 +262,7 @@ export function WorkspaceScreen({
         updated: data.updatedAt ? new Date(data.updatedAt).toLocaleString() : data.updated ?? "",
         description: data.description ?? "",
         relatedEntities: (data.entities ?? []).map((ie: any) => ie.entity),
+        addedEvidence: Array.isArray(data.evidence) ? data.evidence : [],
         latestAssessment: data.aiAssessments?.[0] ?? null,
       });
 
@@ -390,7 +391,7 @@ export function WorkspaceScreen({
   const [addEvidenceSuccess, setAddEvidenceSuccess] = useState(false);
 
   const submitAddEvidence = async () => {
-    if (!inv?.id || !evidenceSource.trim()) return;
+    if (!inv?.id) return;
     setAddingEvidence(true);
     setAddEvidenceError(null);
     setAddEvidenceSuccess(false);
@@ -404,14 +405,50 @@ export function WorkspaceScreen({
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `API ${res.status}`);
       }
+      const created = await res.json();
       setAddEvidenceSuccess(true);
       setEvidenceSource("");
-      setInv((prev: any) => prev ? { ...prev, evidence: (prev.evidence || 0) + 1 } : prev);
-      setTimeout(() => { setShowAddEvidence(false); setAddEvidenceSuccess(false); }, 1200);
+      setInv((prev: any) => prev ? {
+        ...prev,
+        addedEvidence: [...(prev.addedEvidence ?? []), created],
+      } : prev);
+      setTimeout(() => { setShowAddEvidence(false); setAddEvidenceSuccess(false); }, 900);
     } catch (err: any) {
       setAddEvidenceError(err.message ?? "Failed to add evidence");
     } finally {
       setAddingEvidence(false);
+    }
+  };
+
+  const [removingEvidenceId, setRemovingEvidenceId] = useState<string | null>(null);
+  const removeEvidence = async (evidenceId: string) => {
+    if (!inv?.id) return;
+    setRemovingEvidenceId(evidenceId);
+    try {
+      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/evidence/${evidenceId}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 204) throw new Error(`API ${res.status}`);
+      setInv((prev: any) => prev ? {
+        ...prev,
+        addedEvidence: (prev.addedEvidence ?? []).filter((e: any) => e.id !== evidenceId),
+      } : prev);
+    } catch { /* silent */ } finally {
+      setRemovingEvidenceId(null);
+    }
+  };
+
+  const [removingEntityId, setRemovingEntityId] = useState<string | null>(null);
+  const removeEntity = async (entityId: string) => {
+    if (!inv?.id) return;
+    setRemovingEntityId(entityId);
+    try {
+      const res = await fetch(`http://localhost:4000/api/investigations/${inv.id}/entities/${entityId}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 204) throw new Error(`API ${res.status}`);
+      setInv((prev: any) => prev ? {
+        ...prev,
+        relatedEntities: (prev.relatedEntities ?? []).filter((e: any) => e.id !== entityId),
+      } : prev);
+    } catch { /* silent */ } finally {
+      setRemovingEntityId(null);
     }
   };
 
@@ -451,7 +488,16 @@ export function WorkspaceScreen({
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `API ${res.status}`);
       }
-      setInv((prev: any) => prev ? { ...prev, entities: (prev.entities || 0) + 1 } : prev);
+      const link = await res.json();
+      // Add the entity to the displayed list
+      const addedEntity = entityResults.find(e => e.id === entityId);
+      if (addedEntity) {
+        setInv((prev: any) => prev ? {
+          ...prev,
+          relatedEntities: [...(prev.relatedEntities ?? []), addedEntity],
+          entities: (prev.entities || 0) + 1,
+        } : prev);
+      }
       setEntityResults(prev => prev.filter(e => e.id !== entityId));
     } catch (err: any) {
       setAddEntityError(err.message ?? "Failed to add entity");
@@ -620,83 +666,6 @@ export function WorkspaceScreen({
 
   return (
     <div style={{ padding: "26px 28px" }}>
-      {/* ── Add Evidence Modal ─────────────────────────────────────────── */}
-      {showAddEvidence && (
-        <div style={{ position:"fixed",inset:0,zIndex:1000,background:"rgba(7,9,16,0.8)",backdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center" }}
-          onClick={e => { if (e.target===e.currentTarget) setShowAddEvidence(false); }}>
-          <div style={{ background:"var(--card,#0f1420)",border:"1px solid rgba(255,255,255,0.09)",borderRadius:14,padding:28,width:460,boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
-            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
-              <div className="display" style={{ fontSize:15,fontWeight:700,color:"var(--text-1)" }}>Add Evidence</div>
-              <button onClick={() => setShowAddEvidence(false)} style={{ background:"none",border:"none",color:"var(--text-3)",cursor:"pointer",fontSize:17 }}>✕</button>
-            </div>
-            <div style={{ display:"flex",flexDirection:"column",gap:13 }}>
-              <div>
-                <div style={{ fontSize:11,fontWeight:600,color:"var(--text-3)",marginBottom:6 }}>Evidence Type</div>
-                <select className="input" value={evidenceType} onChange={e => setEvidenceType(e.target.value)}
-                  style={{ backgroundImage:"url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235a6b84'/%3E%3C/svg%3E\")",backgroundRepeat:"no-repeat",backgroundPosition:"right 12px center",paddingRight:32 }}>
-                  {["Transaction Record","Wallet Data","Network Communication","Document","Screenshot","Blockchain Analysis","IP Log","Financial Report"].map(t => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <div style={{ fontSize:11,fontWeight:600,color:"var(--text-3)",marginBottom:6 }}>Source / Description</div>
-                <textarea className="input" style={{ minHeight:70,resize:"vertical",fontSize:12.5 }}
-                  placeholder="Describe the evidence source or paste a reference…"
-                  value={evidenceSource} onChange={e => setEvidenceSource(e.target.value)} />
-              </div>
-            </div>
-            {addEvidenceError && <div style={{ fontSize:11.5,color:"var(--critical-light)",marginTop:12 }}>{addEvidenceError}</div>}
-            {addEvidenceSuccess && <div style={{ fontSize:11.5,color:"#4ade80",marginTop:12 }}>✓ Evidence added successfully</div>}
-            <div style={{ display:"flex",gap:8,marginTop:18 }}>
-              <button className="btn btn-primary" style={{ flex:1,justifyContent:"center" }} onClick={submitAddEvidence} disabled={addingEvidence||!evidenceSource.trim()}>
-                {addingEvidence ? "Adding…" : "Add Evidence"}
-              </button>
-              <button className="btn btn-ghost" onClick={() => setShowAddEvidence(false)} disabled={addingEvidence}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Add Entity Modal ──────────────────────────────────────────── */}
-      {showAddEntity && (
-        <div style={{ position:"fixed",inset:0,zIndex:1000,background:"rgba(7,9,16,0.8)",backdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center" }}
-          onClick={e => { if (e.target===e.currentTarget) setShowAddEntity(false); }}>
-          <div style={{ background:"var(--card,#0f1420)",border:"1px solid rgba(255,255,255,0.09)",borderRadius:14,padding:28,width:480,boxShadow:"0 20px 60px rgba(0,0,0,0.6)" }}>
-            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
-              <div className="display" style={{ fontSize:15,fontWeight:700,color:"var(--text-1)" }}>Add Related Entity</div>
-              <button onClick={() => { setShowAddEntity(false); setEntitySearch(""); setEntityResults([]); }} style={{ background:"none",border:"none",color:"var(--text-3)",cursor:"pointer",fontSize:17 }}>✕</button>
-            </div>
-            <div style={{ marginBottom:13 }}>
-              <input className="input" placeholder="Search entities by alias or ID…" value={entitySearch}
-                onChange={e => { setEntitySearch(e.target.value); searchEntities(e.target.value); }} />
-            </div>
-            {entitySearching && <div style={{ fontSize:12,color:"var(--text-4)",marginBottom:10 }}>Searching…</div>}
-            {addEntityError && <div style={{ fontSize:11.5,color:"var(--critical-light)",marginBottom:10 }}>{addEntityError}</div>}
-            <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:260,overflowY:"auto" }}>
-              {entityResults.length === 0 && entitySearch.trim() && !entitySearching && (
-                <div style={{ fontSize:12,color:"var(--text-4)",padding:"12px 0",textAlign:"center" }}>No entities found</div>
-              )}
-              {entityResults.map(e => (
-                <div key={e.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:"rgba(255,255,255,0.03)",borderRadius:8 }}>
-                  <div style={{ width:28,height:28,borderRadius:"50%",background:"rgba(99,102,241,0.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--accent-hi)",flexShrink:0 }}>◈</div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:12.5,fontWeight:500,color:"var(--text-1)" }}>{e.alias}</div>
-                    <div className="mono-sm" style={{ color:"var(--text-4)" }}>{e.displayId ?? e.id}</div>
-                  </div>
-                  <button className="btn btn-ghost btn-sm" onClick={() => addEntityToInvestigation(e.id)} disabled={addingEntityId === e.id}>
-                    {addingEntityId === e.id ? "Adding…" : "+ Add"}
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop:16,textAlign:"right" }}>
-              <button className="btn btn-ghost" onClick={() => { setShowAddEntity(false); setEntitySearch(""); setEntityResults([]); }}>Done</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ── Assign Modal ──────────────────────────────────────────────── */}
       {showAssign && (
         <div style={{ position:"fixed",inset:0,zIndex:1000,background:"rgba(7,9,16,0.8)",backdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center" }}
@@ -773,8 +742,6 @@ export function WorkspaceScreen({
           <div style={{ fontSize: 12, color: "var(--text-3)" }}>Assigned to <span style={{ color: "var(--text-2)" }}>{inv.assignee}</span> · Updated {inv.updated}</div>
         </div>
         <div style={{ display: "flex", gap: 7, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <button className="btn btn-ghost btn-sm" onClick={() => setShowAddEvidence(true)}>Add Evidence</button>
-          <button className="btn btn-ghost btn-sm" onClick={() => setShowAddEntity(true)}>Add Entity</button>
           <button className="btn btn-ghost btn-sm" onClick={focusAddNote}>Add Note</button>
           <button className="btn btn-ghost btn-sm" onClick={() => { setAssigneeName(inv.assignee ?? ""); setShowAssign(true); }}>Assign</button>
           <button className="btn btn-primary btn-sm" onClick={() => navigate("reports")}>Generate Report</button>
@@ -793,50 +760,258 @@ export function WorkspaceScreen({
           </div>
 
           {/* Entities */}
-          <div className="card" style={{ padding: 20 }}>
+          <div className="card" style={{ padding: 20, position: "relative" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)" }}>Related Entities ({inv.entities})</div>
-              <div style={{ display:"flex",gap:6 }}>
-                <button className="btn btn-ghost btn-sm" onClick={() => setShowAddEntity(true)}>+ Add</button>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)" }}>
+                Related Entities {(inv.relatedEntities ?? []).length > 0 && <span style={{ color: "var(--text-4)", fontWeight: 400 }}>({(inv.relatedEntities ?? []).length})</span>}
+              </div>
+              <div style={{ display: "flex", gap: 6, position: "relative" }}>
+                <div style={{ position: "relative" }}>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => { setShowAddEntity(o => !o); setShowAddEvidence(false); }}
+                    style={{ display: "flex", alignItems: "center", gap: 5 }}
+                  >
+                    + Add Entity
+                    <span style={{ fontSize: 8, opacity: 0.6, transform: showAddEntity ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>▼</span>
+                  </button>
+
+                  {showAddEntity && (
+                    <div style={{
+                      position: "absolute", top: "calc(100% + 6px)", right: 0,
+                      width: 360, background: "var(--elevated, #141a27)",
+                      border: "1px solid rgba(255,255,255,0.1)", borderRadius: 11,
+                      boxShadow: "0 12px 40px rgba(0,0,0,0.6)", zIndex: 100,
+                      overflow: "hidden",
+                    }}>
+                      {/* Header */}
+                      <div style={{ padding: "12px 14px 10px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-1)", marginBottom: 8 }}>Add Related Entity</div>
+                        <input
+                          className="input"
+                          style={{ fontSize: 12.5 }}
+                          placeholder="Search by alias or ID…"
+                          value={entitySearch}
+                          autoFocus
+                          onChange={e => { setEntitySearch(e.target.value); searchEntities(e.target.value); }}
+                        />
+                      </div>
+
+                      {/* Results */}
+                      <div style={{ maxHeight: 240, overflowY: "auto" }}>
+                        {!entitySearch.trim() && (
+                          <div style={{ padding: "14px 14px", fontSize: 12, color: "var(--text-4)", textAlign: "center" }}>
+                            Type to search entities…
+                          </div>
+                        )}
+                        {entitySearching && (
+                          <div style={{ padding: "14px", fontSize: 12, color: "var(--text-4)", textAlign: "center" }}>Searching…</div>
+                        )}
+                        {!entitySearching && entitySearch.trim() && entityResults.length === 0 && (
+                          <div style={{ padding: "14px", fontSize: 12, color: "var(--text-4)", textAlign: "center" }}>No entities found</div>
+                        )}
+                        {entityResults.map(e => (
+                          <div
+                            key={e.id}
+                            style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)", transition: "background 0.1s", cursor: "default" }}
+                            onMouseEnter={el => (el.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.04)"}
+                            onMouseLeave={el => (el.currentTarget as HTMLElement).style.background = "transparent"}
+                          >
+                            <div style={{ width: 26, height: 26, borderRadius: "50%", background: "rgba(99,102,241,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "var(--accent-hi)", flexShrink: 0 }}>◈</div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--text-1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.alias}</div>
+                              <div className="mono-sm" style={{ color: "var(--text-4)" }}>{e.displayId ?? e.id}</div>
+                            </div>
+                            <button
+                              className="btn btn-primary btn-sm"
+                              style={{ flexShrink: 0, fontSize: 10.5 }}
+                              onClick={() => addEntityToInvestigation(e.id)}
+                              disabled={addingEntityId === e.id}
+                            >
+                              {addingEntityId === e.id ? "Adding…" : "+ Add"}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      {addEntityError && (
+                        <div style={{ padding: "8px 14px", fontSize: 11.5, color: "var(--critical-light)", borderTop: "1px solid rgba(255,255,255,0.06)" }}>{addEntityError}</div>
+                      )}
+
+                      <div style={{ padding: "8px 14px", borderTop: "1px solid rgba(255,255,255,0.06)", textAlign: "right" }}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => { setShowAddEntity(false); setEntitySearch(""); setEntityResults([]); }}>Done</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <button className="btn btn-ghost btn-sm" onClick={() => navigate("entities")}>View All</button>
               </div>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {(inv.relatedEntities?.length ? inv.relatedEntities : entities).slice(0, 4).map((e: any) => (
-                <div key={e.displayId ?? e.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 8, cursor: "pointer", transition: "background 0.13s" }}
-                  onMouseEnter={el => { (el.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.05)"; }}
-                  onMouseLeave={el => { (el.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.03)"; }}>
-                  <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(99,102,241,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "var(--accent-hi)", flexShrink: 0 }}>◈</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--text-1)" }}>{e.alias}</div>
-                    <div className="mono-sm" style={{ color: "var(--text-4)" }}>{e.displayId ?? e.id}</div>
+
+            {/* Entity list — real data only, no hardcoded fallback */}
+            {(inv.relatedEntities ?? []).length === 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "22px 0", gap: 8 }}>
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.04)", border: "1px dashed rgba(255,255,255,0.1)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, color: "var(--text-4)" }}>◈</div>
+                <div style={{ fontSize: 12.5, color: "var(--text-4)" }}>No entities linked yet</div>
+                <div style={{ fontSize: 11.5, color: "var(--text-4)", opacity: 0.7 }}>Use "+ Add Entity" to link related subjects</div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {(inv.relatedEntities ?? []).map((e: any) => (
+                  <div key={e.displayId ?? e.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "10px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 8, cursor: "pointer", transition: "background 0.13s" }}
+                    onMouseEnter={el => { (el.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.05)"; }}
+                    onMouseLeave={el => { (el.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.03)"; }}>
+                    <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(99,102,241,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "var(--accent-hi)", flexShrink: 0 }}>◈</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--text-1)" }}>{e.alias}</div>
+                      <div className="mono-sm" style={{ color: "var(--text-4)" }}>{e.displayId ?? e.id}</div>
+                    </div>
+                    <RiskBadge score={e.risk} />
+                    <button className="btn btn-ghost btn-sm" onClick={() => navigate("entity", e)}>View</button>
+                    <button
+                      className="icon-btn danger"
+                      style={{ fontSize: 10, padding: "2px 6px", flexShrink: 0 }}
+                      onClick={() => removeEntity(e.id)}
+                      disabled={removingEntityId === e.id}
+                      title="Remove entity"
+                    >
+                      {removingEntityId === e.id ? "…" : "✕"}
+                    </button>
                   </div>
-                  <RiskBadge score={e.risk} />
-                  <button className="btn btn-ghost btn-sm" onClick={() => navigate("entity", e)}>View</button>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Evidence */}
-          <div className="card" style={{ padding: 20 }}>
+          <div className="card" style={{ padding: 20, position: "relative" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)" }}>Evidence ({inv.evidence})</div>
-              <div style={{ display:"flex",gap:6 }}>
-                <button className="btn btn-ghost btn-sm" onClick={() => setShowAddEvidence(true)}>+ Add</button>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-1)" }}>
+                Evidence {(inv.addedEvidence ?? []).length > 0 && <span style={{ color: "var(--text-4)", fontWeight: 400 }}>({(inv.addedEvidence ?? []).length})</span>}
+              </div>
+              <div style={{ display: "flex", gap: 6, position: "relative" }}>
+                <div style={{ position: "relative" }}>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => { setShowAddEvidence(o => !o); setShowAddEntity(false); }}
+                    style={{ display: "flex", alignItems: "center", gap: 5 }}
+                  >
+                    + Add Evidence
+                    <span style={{ fontSize: 8, opacity: 0.6, transform: showAddEvidence ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>▼</span>
+                  </button>
+
+                  {showAddEvidence && (
+                    <div style={{
+                      position: "absolute", top: "calc(100% + 6px)", right: 0,
+                      width: 380, background: "var(--elevated, #141a27)",
+                      border: "1px solid rgba(255,255,255,0.1)", borderRadius: 11,
+                      boxShadow: "0 12px 40px rgba(0,0,0,0.6)", zIndex: 100,
+                      overflow: "hidden",
+                    }}>
+                      <div style={{ padding: "14px 14px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-1)", marginBottom: 12 }}>Add Evidence</div>
+
+                        {/* Type selector */}
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ fontSize: 10.5, fontWeight: 600, color: "var(--text-4)", marginBottom: 5, letterSpacing: "0.04em" }}>TYPE</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
+                            {[
+                              { value: "Transaction Record", icon: "⇄" },
+                              { value: "Wallet Data",        icon: "◎" },
+                              { value: "Blockchain Analysis",icon: "⛓" },
+                              { value: "Network Communication", icon: "⚡" },
+                              { value: "Document",           icon: "📄" },
+                              { value: "IP Log",             icon: "🌐" },
+                              { value: "Screenshot",         icon: "📷" },
+                              { value: "Financial Report",   icon: "📊" },
+                            ].map(t => (
+                              <button
+                                key={t.value}
+                                type="button"
+                                onClick={() => setEvidenceType(t.value)}
+                                style={{
+                                  display: "flex", alignItems: "center", gap: 6,
+                                  padding: "6px 9px", borderRadius: 6, fontSize: 11.5,
+                                  background: evidenceType === t.value ? "rgba(99,102,241,0.18)" : "rgba(255,255,255,0.04)",
+                                  border: `1px solid ${evidenceType === t.value ? "rgba(99,102,241,0.4)" : "rgba(255,255,255,0.07)"}`,
+                                  color: evidenceType === t.value ? "var(--accent-hi)" : "var(--text-3)",
+                                  cursor: "pointer", transition: "all 0.13s", textAlign: "left",
+                                  fontFamily: "Inter,sans-serif",
+                                }}
+                              >
+                                <span style={{ fontSize: 12 }}>{t.icon}</span>
+                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.value}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Description */}
+                        <div>
+                          <div style={{ fontSize: 10.5, fontWeight: 600, color: "var(--text-4)", marginBottom: 5, letterSpacing: "0.04em" }}>DESCRIPTION</div>
+                          <textarea
+                            className="input"
+                            style={{ minHeight: 60, resize: "vertical", fontSize: 12 }}
+                            placeholder="Source reference, hash, or brief description…"
+                            value={evidenceSource}
+                            autoFocus
+                            onChange={e => setEvidenceSource(e.target.value)}
+                          />
+                        </div>
+                      </div>
+
+                      {addEvidenceError && (
+                        <div style={{ padding: "8px 14px", fontSize: 11.5, color: "var(--critical-light)" }}>{addEvidenceError}</div>
+                      )}
+                      {addEvidenceSuccess && (
+                        <div style={{ padding: "8px 14px", fontSize: 11.5, color: "#4ade80" }}>✓ Evidence added</div>
+                      )}
+
+                      <div style={{ display: "flex", gap: 8, padding: "10px 14px", borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          style={{ flex: 1, justifyContent: "center" }}
+                          onClick={submitAddEvidence}
+                          disabled={addingEvidence}
+                        >
+                          {addingEvidence ? "Adding…" : "Add Evidence"}
+                        </button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => { setShowAddEvidence(false); setEvidenceSource(""); }}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <button className="btn btn-ghost btn-sm" onClick={() => navigate("evidence")}>View All</button>
               </div>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-              {evidenceRecords.slice(0, 3).map(ev => (
-                <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "9px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 7 }}>
-                  <span className="mono-sm" style={{ color: "var(--text-4)" }}>{ev.id}</span>
-                  <span style={{ flex: 1, fontSize: 12, color: "var(--text-2)" }}>{ev.type}</span>
-                  <span style={{ fontSize: 11, color: "var(--text-4)" }}>{ev.ts.split("·")[0].trim()}</span>
-                  <span className={`badge ${ev.status === "Verified" ? "badge-verified" : "badge-pending"}`}>{ev.status}</span>
-                </div>
-              ))}
-            </div>
+
+            {/* Evidence list — real data only, no hardcoded fallback */}
+            {(inv.addedEvidence ?? []).length === 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "22px 0", gap: 8 }}>
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,0.04)", border: "1px dashed rgba(255,255,255,0.1)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, color: "var(--text-4)" }}>⊟</div>
+                <div style={{ fontSize: 12.5, color: "var(--text-4)" }}>No evidence added yet</div>
+                <div style={{ fontSize: 11.5, color: "var(--text-4)", opacity: 0.7 }}>Use "+ Add Evidence" to attach records</div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                {(inv.addedEvidence ?? []).map((ev: any) => (
+                  <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "9px 12px", background: "rgba(255,255,255,0.03)", borderRadius: 7 }}>
+                    <span className="mono-sm" style={{ color: "var(--text-4)", flexShrink: 0 }}>{ev.displayId ?? ev.id}</span>
+                    <span style={{ flex: 1, fontSize: 12, color: "var(--text-2)" }}>{ev.type}</span>
+                    <span className={`badge ${ev.status === "VERIFIED" || ev.status === "Verified" ? "badge-verified" : "badge-pending"}`}>{ev.status}</span>
+                    <button
+                      className="icon-btn danger"
+                      style={{ fontSize: 10, padding: "2px 6px", flexShrink: 0 }}
+                      onClick={() => removeEvidence(ev.id)}
+                      disabled={removingEvidenceId === ev.id}
+                      title="Remove evidence"
+                    >
+                      {removingEvidenceId === ev.id ? "…" : "✕"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Notes */}

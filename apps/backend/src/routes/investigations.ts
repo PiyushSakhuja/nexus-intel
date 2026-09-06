@@ -99,8 +99,8 @@ investigationsRouter.post("/:displayId/entities", async (req, res) => {
 
 // POST /api/investigations/:displayId/evidence — add an evidence record
 investigationsRouter.post("/:displayId/evidence", async (req, res) => {
-  const { type, source } = req.body as { type?: string; source?: string };
-  if (!type || !source?.trim()) return res.status(400).json({ error: "type and source are required" });
+  const { type, notes } = req.body as { type?: string; notes?: string };
+  if (!type?.trim()) return res.status(400).json({ error: "type is required" });
 
   const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
   if (!inv) return res.status(404).json({ error: "Investigation not found" });
@@ -112,13 +112,37 @@ investigationsRouter.post("/:displayId/evidence", async (req, res) => {
     data: {
       displayId,
       investigationId: inv.id,
-      type: type.trim(),
+      type: type!.trim(),
       uploadedBy: "Investigator A",
       status: "PENDING",
       hash: `sha256-${Math.random().toString(36).slice(2, 18)}`,
     },
   });
   res.status(201).json(evidence);
+});
+
+// DELETE /api/investigations/:displayId/evidence/:evidenceId
+investigationsRouter.delete("/:displayId/evidence/:evidenceId", async (req, res) => {
+  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
+  if (!inv) return res.status(404).json({ error: "Investigation not found" });
+  const ev = await prisma.evidenceRecord.findUnique({ where: { id: req.params.evidenceId } });
+  if (!ev || ev.investigationId !== inv.id) return res.status(404).json({ error: "Evidence not found" });
+  await prisma.evidenceRecord.delete({ where: { id: ev.id } });
+  res.status(204).send();
+});
+
+// DELETE /api/investigations/:displayId/entities/:entityId
+investigationsRouter.delete("/:displayId/entities/:entityId", async (req, res) => {
+  const inv = await prisma.investigation.findUnique({ where: { displayId: req.params.displayId } });
+  if (!inv) return res.status(404).json({ error: "Investigation not found" });
+  const link = await prisma.investigationEntity.findUnique({
+    where: { investigationId_entityId: { investigationId: inv.id, entityId: req.params.entityId } },
+  });
+  if (!link) return res.status(404).json({ error: "Entity not linked to this investigation" });
+  await prisma.investigationEntity.delete({
+    where: { investigationId_entityId: { investigationId: inv.id, entityId: req.params.entityId } },
+  });
+  res.status(204).send();
 });
 
 investigationsRouter.get("/:displayId", async (req, res) => {

@@ -675,6 +675,37 @@ select.input { appearance: none; cursor: pointer; }
   pointer-events: none;
 }
 
+/* ─── Investigation card delete button ───────────────────────────────────────── */
+
+.inv-card .inv-delete-btn {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-4);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, border-color 0.15s, color 0.15s;
+  z-index: 2;
+}
+
+.inv-card:hover .inv-delete-btn {
+  opacity: 1;
+}
+
+.inv-delete-btn:hover {
+  background: rgba(220, 38, 38, 0.12) !important;
+  border-color: rgba(220, 38, 38, 0.28) !important;
+  color: var(--critical-light) !important;
+}
+
 /* ─── Styled dropdown (custom select) ───────────────────────────────────────── */
 
 .styled-dropdown-trigger {
