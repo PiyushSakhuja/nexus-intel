@@ -10,8 +10,9 @@
 //
 //   - Entity <-> Network        : Entity.networkId (real FK)
 //   - Entity <-> Wallet         : WalletTransaction.entityId (real FK)
-//   - Entity <-> Listing        : Listing.vendorAlias === Entity.alias
-//                                 (exact-match correlation — same
+//   - Entity <-> Listing        : normalizeVendorAlias(Listing.vendorAlias)
+//                                 === normalizeVendorAlias(Entity.alias)
+//                                 (normalized-alias correlation — same
 //                                 convention as vendorRisk.ts/entityRisk.ts;
 //                                 NOT identity resolution, see those files)
 //   - Entity <-> Alert          : AlertEntity (real FK, already modeled)
@@ -28,9 +29,9 @@
 
 import type { Entity, Investigation, Listing, Network, Source, Wallet, WalletTransaction } from "@prisma/client";
 import { prisma } from "./prisma.js";
-import { scoreAllWallets } from "./walletRisk.js";
 import { computeVendorRisk, type VendorRisk } from "./vendorRisk.js";
 import { computeEntityRisk } from "./entityRisk.js";
+import { normalizeVendorAlias } from "./entityCorrelation.js";
 import { scoreListings, signalsToDisplayStrings, type ListingInput } from "./riskEngine.js";
 import { computeInvestigationSignals, type AssessmentSignal } from "./investigationAssessment.js";
 import { riskToStatus } from "./riskStatus.js";
@@ -122,14 +123,21 @@ function buildEntityRelationships(
     });
   }
 
-  const listings = listingsByVendorAlias.get(entity.alias) ?? [];
+  // listingsByVendorAlias is keyed by NORMALIZED alias (see where it's
+  // built, below) — normalize entity.alias the same way before lookup, so
+  // this can't silently miss a match that vendorRisk.ts/entityRisk.ts would
+  // find (e.g. entity alias "HappyEyes" vs listing vendorAlias "happyeyes").
+  const listings = listingsByVendorAlias.get(normalizeVendorAlias(entity.alias)) ?? [];
   for (const listing of listings) {
+    const sameRawSpelling = listing.vendorAlias === entity.alias;
     relationships.push({
       type: "LISTING_MATCH",
       listingDisplayId: listing.displayId,
       category: listing.category,
       marketplace: listing.marketplace,
-      explanation: `Listing.vendorAlias "${listing.vendorAlias}" matches this entity's alias exactly.`,
+      explanation: sameRawSpelling
+        ? `Listing.vendorAlias "${listing.vendorAlias}" matches this entity's alias exactly.`
+        : `Listing.vendorAlias "${listing.vendorAlias}" matches this entity's alias "${entity.alias}" after normalization (case/whitespace only — not an exact string match).`,
     });
   }
 
@@ -164,21 +172,6 @@ export interface WalletContribution {
   flagged: boolean;
   connectedBecause: string;
   transactions: WalletTransactionSummary[];
-  // Real, transaction-derived risk (see lib/walletRisk.ts) for THIS
-  // investigation's slice of the wallet's activity — i.e. only the
-  // transactions that actually connect to this investigation's entities/
-  // network, not the wallet's full history. `risk` above mirrors
-  // computed.score when calculable; legacy.risk is the untouched seeded
-  // value for comparison.
-  computed: {
-    score: number;
-    calculable: boolean;
-    explanation: string;
-  };
-  legacy: {
-    risk: number;
-    note: string;
-  };
 }
 
 function describeWalletRelevance(
@@ -236,40 +229,16 @@ export async function computeInvestigationWallets(
     }
   }
 
-  // Score each connected wallet from its FULL transaction history (not
-  // just the investigation-scoped slice above) — same real, deterministic
-  // lib/walletRisk.ts logic used everywhere else, so a wallet's risk here
-  // never disagrees with the Blockchain Intelligence screen or the entity
-  // risk it feeds into. `txns` (investigation-scoped) is kept only for
-  // `connectedBecause`/`transactions` display, per this function's header.
-  const allWalletTxns =
-    byWallet.size > 0
-      ? await prisma.walletTransaction.findMany({ where: { walletId: { in: Array.from(byWallet.keys()) } } })
-      : [];
-  const walletRiskById = scoreAllWallets(Array.from(byWallet.keys()), allWalletTxns);
-
   return Array.from(byWallet.values())
-    .map(({ wallet, txns }) => {
-      const computed = walletRiskById.get(wallet.id)!;
-      return {
-        displayId: wallet.displayId,
-        risk: computed.calculable ? computed.score : wallet.risk,
-        cluster: wallet.cluster,
-        totalVolume: wallet.totalVolume,
-        flagged: wallet.flagged,
-        connectedBecause: describeWalletRelevance(txns),
-        transactions: txns,
-        computed: {
-          score: computed.score,
-          calculable: computed.calculable,
-          explanation: computed.explanation,
-        },
-        legacy: {
-          risk: wallet.risk,
-          note: "Seed-time stored value — not derived from WalletTransaction evidence.",
-        },
-      };
-    })
+    .map(({ wallet, txns }) => ({
+      displayId: wallet.displayId,
+      risk: wallet.risk,
+      cluster: wallet.cluster,
+      totalVolume: wallet.totalVolume,
+      flagged: wallet.flagged,
+      connectedBecause: describeWalletRelevance(txns),
+      transactions: txns,
+    }))
     .sort((a, b) => b.risk - a.risk);
 }
 
@@ -295,11 +264,15 @@ export interface ListingContribution {
 export async function computeInvestigationListings(
   investigationEntities: { displayId: string; alias: string }[]
 ): Promise<ListingContribution[]> {
-  const aliasToEntity = new Map(investigationEntities.map((e) => [e.alias, e]));
+  // Keyed by NORMALIZED alias (see normalizeVendorAlias in
+  // entityCorrelation.ts) — same convention as vendorRisk.ts/entityRisk.ts,
+  // so a listing's vendorAlias only needs to match an investigation
+  // entity's alias after case/whitespace normalization, not byte-for-byte.
+  const aliasToEntity = new Map(investigationEntities.map((e) => [normalizeVendorAlias(e.alias), e]));
   if (aliasToEntity.size === 0) return [];
 
   const allListings = await prisma.listing.findMany({ include: { source: true } });
-  const relevant = allListings.filter((l) => l.vendorAlias && aliasToEntity.has(l.vendorAlias));
+  const relevant = allListings.filter((l) => l.vendorAlias && aliasToEntity.has(normalizeVendorAlias(l.vendorAlias)));
   if (relevant.length === 0) return [];
 
   const inputs: ListingInput[] = allListings.map((l) => ({
@@ -318,7 +291,7 @@ export async function computeInvestigationListings(
   return relevant
     .map((l) => {
       const result = scored.get(l.id);
-      const entity = l.vendorAlias ? aliasToEntity.get(l.vendorAlias) ?? null : null;
+      const entity = l.vendorAlias ? aliasToEntity.get(normalizeVendorAlias(l.vendorAlias)) ?? null : null;
       return {
         displayId: l.displayId,
         category: l.category,
@@ -381,12 +354,16 @@ export async function buildInvestigationDetailExtras(input: AssembleInput): Prom
     lastSeen: l.lastSeen,
   }));
   const vendorRiskByAlias: Map<string, VendorRisk> = computeVendorRisk(listingInputs);
+  // Keyed by NORMALIZED alias, same convention as vendorRiskByAlias, so
+  // this map can't find a different set of "matching" listings than the
+  // risk pipeline does for the same entity.
   const listingsByVendorAlias = new Map<string, Listing[]>();
   for (const l of allListings) {
     if (!l.vendorAlias) continue;
-    const arr = listingsByVendorAlias.get(l.vendorAlias) ?? [];
+    const normalized = normalizeVendorAlias(l.vendorAlias);
+    const arr = listingsByVendorAlias.get(normalized) ?? [];
     arr.push(l);
-    listingsByVendorAlias.set(l.vendorAlias, arr);
+    listingsByVendorAlias.set(normalized, arr);
   }
 
   // Wallet transactions for THIS investigation's entities/network — the
