@@ -25,6 +25,7 @@
 // never defaulted to some number.
 
 import type { VendorRisk } from "./vendorRisk.js";
+import { normalizeVendorAlias } from "./entityCorrelation.js";
 import { signalsToContributors, type RiskContributor } from "./riskEngine.js";
 import type { WalletRiskResult } from "./walletRisk.js";
 
@@ -77,7 +78,7 @@ export function computeEntityRisk(
   walletEvidenceByEntityId?: Map<string, EntityWalletEvidence>,
   entityId?: string
 ): EntityComputedRisk {
-  const vendor = vendorRiskByAlias.get(entityAlias);
+  const vendor = vendorRiskByAlias.get(normalizeVendorAlias(entityAlias));
   const walletEvidence = entityId ? walletEvidenceByEntityId?.get(entityId) ?? null : null;
 
   if (!vendor && !walletEvidence) {
@@ -141,7 +142,10 @@ export function computeEntityRisk(
     // ignoring blockchain activity that is already stored and linked via
     // WalletTransaction.entityId.
     const walletRiskFigure = Math.round((walletEvidence.maxWalletRisk ?? 0) * 0.7 + (walletEvidence.averageWalletRisk ?? 0) * 0.3);
-    risk = Math.max(0, Math.min(100, Math.round(vendorRisk * (1 - WALLET_RISK_BLEND_WEIGHT) + walletRiskFigure * WALLET_RISK_BLEND_WEIGHT)));
+    const blendedRisk = Math.max(0, Math.min(100, Math.round(vendorRisk * (1 - WALLET_RISK_BLEND_WEIGHT) + walletRiskFigure * WALLET_RISK_BLEND_WEIGHT)));
+    // Wallet evidence may escalate an entity, but it must never dilute the
+    // listing-derived risk below the highest severe listing already known.
+    risk = Math.max(vendorRisk, blendedRisk);
     confidence = Math.max(0, Math.min(100, confidence + Math.min(10, walletEvidence.walletCount * 3)));
     explanation += ` Blended with computed risk from ${walletEvidence.walletCount} linked wallet(s) (${walletEvidence.totalTransactionCount} transaction(s); wallet-derived component weighted at ${Math.round(WALLET_RISK_BLEND_WEIGHT * 100)}%).`;
   }

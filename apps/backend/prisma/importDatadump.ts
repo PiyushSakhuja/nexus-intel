@@ -45,6 +45,7 @@ import {
 } from '../src/lib/riskEngine.js'
 import { computeVendorRisk } from '../src/lib/vendorRisk.js'
 import { computeEntityRisk } from '../src/lib/entityRisk.js'
+import { normalizeVendorAlias } from '../src/lib/entityCorrelation.js'
 
 const prisma = new PrismaClient()
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -311,10 +312,18 @@ async function main() {
     console.log(`Inserted ${created.count} listings (Drugs/Fraud Related/Counterfeits = high-risk categories, ${HIGH_RISK_CATEGORIES.size} tracked)`)
   }
 
-  // ─── Entities for the top vendors (skip any alias that already has one) ──
+  // ─── Entities for every vendor represented in the imported listing slice ──
+  // Older versions created Entity rows only for the top 40 vendors, which
+  // left valid listing vendors missing from Entities/Network Graph. Keep the
+  // curated listing sample exactly as-is, but make entity coverage complete
+  // for that sample. Canonical alias matching also prevents variants such as
+  // HappyEyes / Happy_Eyes from becoming duplicate entities on re-import.
   const existingEntities = await prisma.entity.findMany({ select: { alias: true, displayId: true } })
-  const existingAliasSet = new Set(existingEntities.map((e) => e.alias))
+  const existingAliasSet = new Set(existingEntities.map((e) => normalizeVendorAlias(e.alias)))
   const existingDisplayIdSet = new Set(existingEntities.map((e) => e.displayId))
+  const entityAliases = Array.from(
+    new Map(selected.map((r) => [normalizeVendorAlias(r.vendorAlias), r.vendorAlias])).values()
+  )
 
   // Build vendor risk from the FULL current listing table (existing +
   // newly imported) so new entities' risk/confidence match exactly what
@@ -335,8 +344,9 @@ async function main() {
   )
 
   let entitiesCreated = 0
-  for (const alias of topVendors) {
-    if (existingAliasSet.has(alias)) continue // already represented
+  for (const alias of entityAliases) {
+    const normalizedAlias = normalizeVendorAlias(alias)
+    if (existingAliasSet.has(normalizedAlias)) continue // already represented by this alias family
 
     let displayId = alias.charAt(0).toUpperCase() + alias.slice(1)
     let suffix = 2
@@ -346,7 +356,9 @@ async function main() {
     existingDisplayIdSet.add(displayId)
 
     const computed = computeEntityRisk(alias, vendorRiskByAlias)
-    const vendorListings = allListingsNow.filter((l) => l.vendorAlias === alias)
+    const vendorListings = allListingsNow.filter(
+      (l) => l.vendorAlias && normalizeVendorAlias(l.vendorAlias) === normalizedAlias
+    )
     const firstSeen = vendorListings.length
       ? new Date(Math.min(...vendorListings.map((l) => l.firstSeen.getTime())))
       : new Date()
@@ -365,9 +377,10 @@ async function main() {
         lastSeen,
       },
     })
+    existingAliasSet.add(normalizedAlias)
     entitiesCreated++
   }
-  console.log(`Created ${entitiesCreated} new vendor entities (${topVendors.length - entitiesCreated} of the top ${topVendors.length} already existed)`)
+  console.log(`Created ${entitiesCreated} new vendor entities; all ${entityAliases.length} vendor alias families in the imported listing slice are now represented`)
 }
 
 main()

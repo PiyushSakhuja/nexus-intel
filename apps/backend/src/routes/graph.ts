@@ -66,6 +66,7 @@ graphRouter.get("/", async (req, res) => {
         select: {
           id: true,
           displayId: true,
+          alias: true,
           networkId: true,
         },
       })
@@ -73,6 +74,15 @@ graphRouter.get("/", async (req, res) => {
 
   const displayIdByEntityId = new Map(
     entities.map((e) => [e.id, e.displayId])
+  );
+
+  // Use the same live listing-derived risk calculation as /api/entities,
+  // rather than the seed-time GraphNode.risk value. This removes the last
+  // visible source of score drift between the graph and entity/listing
+  // screens.
+  const vendorRiskByAlias = await buildVendorRiskMap();
+  const liveEntityRiskByEntityId = new Map(
+    entities.map((e) => [e.id, computeEntityRisk(e.alias, vendorRiskByAlias).risk])
   );
 
   // Entity Risk vs. Network Risk (GraphScreen's top toggle): previously
@@ -97,13 +107,10 @@ graphRouter.get("/", async (req, res) => {
 
   const networkRiskByNetworkId = new Map<string, number | null>();
   if (networkIds.length) {
-    const [networks, vendorRiskByAlias] = await Promise.all([
-      prisma.network.findMany({
-        where: { id: { in: networkIds } },
-        include: { entities: { select: { alias: true } } },
-      }),
-      buildVendorRiskMap(),
-    ]);
+    const networks = await prisma.network.findMany({
+      where: { id: { in: networkIds } },
+      include: { entities: { select: { alias: true } } },
+    });
 
     for (const network of networks) {
       const entityRisks = network.entities.map((e) =>
@@ -126,6 +133,7 @@ graphRouter.get("/", async (req, res) => {
       : null;
     return {
       ...n,
+      risk: liveEntityRiskByEntityId.get(n.entityId) ?? n.risk,
       displayId: displayIdByEntityId.get(n.entityId) ?? null,
       networkRisk,
     };

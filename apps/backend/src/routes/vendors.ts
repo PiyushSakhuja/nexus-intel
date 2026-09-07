@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { computeVendorRisk } from "../lib/vendorRisk.js";
+import { normalizeVendorAlias } from "../lib/entityCorrelation.js";
 import type { ListingInput } from "../lib/riskEngine.js";
 import { logAudit, ipFromRequest } from "../lib/audit.js";
 
@@ -46,7 +47,7 @@ vendorsRouter.get("/", async (req, res) => {
 // GET /api/vendors/:vendorAlias — single vendor profile
 vendorsRouter.get("/:vendorAlias", async (req, res) => {
   const inputs = await loadListingInputs();
-  const vendor = computeVendorRisk(inputs).get(req.params.vendorAlias);
+  const vendor = computeVendorRisk(inputs).get(normalizeVendorAlias(req.params.vendorAlias));
   if (!vendor) return res.status(404).json({ error: "Vendor not found" });
 
   await logAudit({

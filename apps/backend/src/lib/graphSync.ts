@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { normalizeVendorAlias } from "./entityCorrelation.js";
 let graphSyncInFlight: Promise<{ nodeCount: number; edgeCount: number }> | null = null;
 
 // Deterministic hash -> angle, so each node always lands in the same
@@ -60,10 +61,11 @@ const walletGraphNodeId = (walletId: string) => `gph_wallet_${walletId}`;
 // distinct marketplace names and risk values on real Listing rows) — no
 // per-listing node or edge is created anymore.
 export async function syncGraphFromEntities(prisma: PrismaClient): Promise<{ nodeCount: number; edgeCount: number }> {
-  const [allEntities, allListings, allWallets] = await Promise.all([
+  const [allEntities, allListings, allWallets, allWalletTransactions] = await Promise.all([
     prisma.entity.findMany({ include: { identifiers: true } }),
     prisma.listing.findMany(),
     prisma.wallet.findMany(),
+    prisma.walletTransaction.findMany({ select: { walletId: true, entityId: true } }),
   ]);
 
   // Edges are always fully recomputed below from current data, so it's
@@ -173,6 +175,56 @@ export async function syncGraphFromEntities(prisma: PrismaClient): Promise<{ nod
       create: { id, fromId, toId, label },
     });
     edgeCount++;
+  }
+
+  // Entity <-> Market: a real listing explicitly ties a vendor alias to a
+  // marketplace. This is the main structural relationship that was missing
+  // from the graph: market nodes existed, but nothing connected entities to
+  // them, leaving most of the graph as isolated dots. Alias matching uses the
+  // same canonical normalizer as the correlation layer, so HappyEyes and
+  // Happy_Eyes resolve to the same alias family.
+  const entityIdsByNormalizedAlias = new Map<string, string[]>();
+  for (const entity of allEntities) {
+    const key = normalizeVendorAlias(entity.alias);
+    if (!key) continue;
+    const ids = entityIdsByNormalizedAlias.get(key) ?? [];
+    ids.push(entity.id);
+    entityIdsByNormalizedAlias.set(key, ids);
+  }
+
+  for (const listing of allListings) {
+    if (!listing.vendorAlias || !listing.marketplace) continue;
+    const entityIds = entityIdsByNormalizedAlias.get(normalizeVendorAlias(listing.vendorAlias)) ?? [];
+    const marketNodeId = marketGraphNodeId(listing.marketplace);
+    for (const entityId of entityIds) {
+      const entityNodeId = nodeIdByEntityId.get(entityId);
+      if (entityNodeId) await upsertEdge(entityNodeId, marketNodeId, `Observed On: ${listing.marketplace}`);
+    }
+  }
+
+  // Entity <-> Wallet: WalletTransaction.entityId is an explicit database
+  // relationship, so every linked wallet should be visible as a real graph
+  // edge instead of floating as an isolated cyan node.
+  for (const txn of allWalletTransactions) {
+    if (!txn.entityId) continue;
+    const entityNodeId = nodeIdByEntityId.get(txn.entityId);
+    if (!entityNodeId) continue;
+    await upsertEdge(entityNodeId, walletGraphNodeId(txn.walletId), "Linked Wallet");
+  }
+
+  // Entity <-> Entity: canonical alias variants. Existing databases may
+  // already contain both forms (e.g. HappyEyes and Happy_Eyes) from older
+  // imports. Keep both records intact, but show the correlation explicitly
+  // rather than presenting them as unrelated entities.
+  for (const entityIds of entityIdsByNormalizedAlias.values()) {
+    if (entityIds.length < 2) continue;
+    for (let a = 0; a < entityIds.length; a++) {
+      for (let b = a + 1; b < entityIds.length; b++) {
+        const from = nodeIdByEntityId.get(entityIds[a]);
+        const to = nodeIdByEntityId.get(entityIds[b]);
+        if (from && to) await upsertEdge(from, to, "Canonical Alias Match");
+      }
+    }
   }
 
   // Entity <-> Entity: shared shipping origin. (Marketplace-based

@@ -17,6 +17,7 @@
 // presenting it as confirmed identity.
 
 import { scoreListings, HIGH_RISK_CATEGORIES, type ListingInput, type RiskSignal } from "./riskEngine.js";
+import { normalizeVendorAlias } from "./entityCorrelation.js";
 
 export interface VendorRisk {
   vendorAlias: string;
@@ -61,13 +62,16 @@ export function computeVendorRisk(listings: ListingInput[]): Map<string, VendorR
   const byVendor = new Map<string, ListingInput[]>();
   for (const l of listings) {
     if (!l.vendorAlias) continue; // no vendor to attribute this listing to
-    const arr = byVendor.get(l.vendorAlias) ?? [];
+    const normalizedAlias = normalizeVendorAlias(l.vendorAlias);
+    if (!normalizedAlias) continue;
+    const arr = byVendor.get(normalizedAlias) ?? [];
     arr.push(l);
-    byVendor.set(l.vendorAlias, arr);
+    byVendor.set(normalizedAlias, arr);
   }
 
   const out = new Map<string, VendorRisk>();
-  for (const [vendorAlias, vendorListings] of byVendor) {
+  for (const [normalizedAlias, vendorListings] of byVendor) {
+    const vendorAlias = vendorListings[0].vendorAlias!;
     const risks = vendorListings.map((l) => scored.get(l.id)!.score);
     const marketplaces = new Set<string>();
     const categories = new Set<string>();
@@ -106,9 +110,13 @@ export function computeVendorRisk(listings: ListingInput[]): Map<string, VendorR
     const crossMarketBonus = marketplaces.size >= 2 ? 10 : 0;
     const categoryDiversityBonus = Math.min(10, highRiskCategories.length * 5);
     const raw = meanRisk * 0.5 + maxRisk * 0.3 + crossMarketBonus + categoryDiversityBonus;
-    const risk = Math.max(0, Math.min(100, Math.round(raw)));
+    // An entity/vendor aggregate should never hide a more severe listing
+    // that belongs to it. Keep the aggregate formula, but floor the final
+    // score at the highest current listing risk so every screen speaks the
+    // same risk language.
+    const risk = Math.max(maxRisk, Math.max(0, Math.min(100, Math.round(raw))));
 
-    out.set(vendorAlias, {
+    out.set(normalizedAlias, {
       vendorAlias,
       risk,
       listingCount: vendorListings.length,

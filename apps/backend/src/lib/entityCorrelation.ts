@@ -30,14 +30,11 @@
 //     riskEngine.ts's WEIGHTS table).
 //
 // ─── Why normalized alias, not fuzzy alias matching ─────────────────────
-// A fuzzy/edit-distance alias matcher ("pure12" ~ "pure_12") would be
-// aggressive merging territory — exactly what the brief says to avoid.
-// Normalization here is intentionally conservative: case-folding,
-// whitespace trimming/collapsing, and stripping zero-width/control
-// characters. It fixes formatting noise (the same seller typed their own
-// handle with different capitalization or stray whitespace across
-// listings/marketplaces) without guessing that two visually-similar but
-// distinct handles are the same person.
+// We still avoid edit-distance/fuzzy guesses, but we do canonicalize common
+// visual separators because the imported marketplace data contains the same
+// handle in forms such as "HappyEyes" and "Happy_Eyes". Case, spaces,
+// underscores, hyphens and dots are therefore treated as formatting noise;
+// no broader fuzzy matching is performed.
 
 import { HIGH_RISK_CATEGORIES, type ListingInput } from "./riskEngine.js";
 
@@ -105,18 +102,17 @@ export const CORRELATION_WEIGHTS = {
 // ─── 1. Normalized vendor alias ─────────────────────────────────────────
 
 /**
- * Conservative alias normalization: case-folding, whitespace
- * trimming/collapsing, and stripping zero-width/control characters.
- * Deliberately does NOT strip punctuation/separators (e.g. "_", "-", ".")
- * because doing so risks merging genuinely distinct handles — that would
- * be aggressive merging, which the brief explicitly says to avoid.
+ * Canonical alias normalization: case-folding, trimming, removing
+ * zero-width characters, and removing common visual separators. This is
+ * deterministic and intentionally narrower than fuzzy/edit-distance
+ * matching.
  */
 export function normalizeVendorAlias(alias: string): string {
   return alias
-    .replace(/[\u200B-\u200D\uFEFF]/g, "") // zero-width chars
-    .replace(/\s+/g, " ")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .trim()
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/[\s_.-]+/g, "");
 }
 
 // ─── 2. Title similarity ────────────────────────────────────────────────

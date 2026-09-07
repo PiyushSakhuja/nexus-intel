@@ -40,9 +40,9 @@ export function ListingsScreen() {
       {loading && <p className="page-sub" style={{marginBottom:12}}>Loading listings…</p>}
       {error && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({error}).</p>}
       {!loading && !error && rows.length === 0 && <p className="page-sub" style={{marginBottom:12}}>No listings recorded yet.</p>}
-      <div style={{display:"grid",gridTemplateColumns:sel?"1fr 360px":"1fr",gap:16,transition:"all 0.25s"}}>
-        <div className="card">
-          <table className="data-table">
+      <div style={{display:"grid",gridTemplateColumns:sel?"minmax(0, 1fr) minmax(300px, 360px)":"minmax(0, 1fr)",gap:16,transition:"all 0.25s",alignItems:"start"}}>
+        <div className="card" style={{minWidth:0,overflowX:"auto"}}>
+          <table className="data-table" style={{minWidth:1080}}>
             <thead><tr><th>Record ID</th><th>Marketplace</th><th>Vendor</th><th>Title</th><th>Category</th><th>Risk</th><th>Price</th><th>First Seen</th><th>Last Seen</th><th>Status</th></tr></thead>
             <tbody>
               {rows.map(l=>(
@@ -71,7 +71,7 @@ export function ListingsScreen() {
         </div>
 
         {sel && (
-          <div className="card anim-slide-r" style={{padding:20,height:"fit-content"}}>
+          <div className="card anim-slide-r" style={{padding:20,minWidth:0,width:"100%",boxSizing:"border-box",height:"fit-content",maxHeight:"calc(100vh - 120px)",overflowY:"auto",position:"sticky",top:16}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}>
               <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)"}}>Record Details</div>
               <button onClick={()=>setSel(null)} style={{background:"none",border:"none",color:"var(--text-4)",cursor:"pointer",fontSize:20,lineHeight:1}}>×</button>
@@ -91,7 +91,7 @@ export function ListingsScreen() {
             ].map(item=>(
               <div key={item.l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
                 <span style={{fontSize:11,color:"var(--text-4)"}}>{item.l}</span>
-                <span style={{fontSize:12,color:"var(--text-2)"}}>{item.v}</span>
+                <span style={{fontSize:12,color:"var(--text-2)",textAlign:"right",overflowWrap:"anywhere",maxWidth:"62%"}}>{item.v}</span>
               </div>
             ))}
 
