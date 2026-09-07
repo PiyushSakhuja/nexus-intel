@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { computeVendorRisk, type VendorRisk } from "../lib/vendorRisk.js";
-import { computeEntityRisk } from "../lib/entityRisk.js";
+import { computeEntityRisk, buildEntityWalletEvidence, type EntityWalletEvidence } from "../lib/entityRisk.js";
 import { computeNetworkRiskAggregate } from "../lib/networkRisk.js";
 import { riskToStatus } from "../lib/riskStatus.js";
 import type { ListingInput } from "../lib/riskEngine.js";
+import { scoreAllWallets } from "../lib/walletRisk.js";
 import { logAudit, ipFromRequest } from "../lib/audit.js";
 
 export const networksRouter = Router();
@@ -24,13 +25,34 @@ async function buildVendorRiskMap(): Promise<Map<string, VendorRisk>> {
   }));
   return computeVendorRisk(inputs);
 }
+
+// Same wallet -> entity evidence pipeline as routes/entities.ts (see that
+// file's buildWalletEvidenceByEntityId for the full explanation). Kept as
+// a separate copy here rather than a shared import cycle between routes,
+// but the underlying computation (scoreAllWallets + buildEntityWalletEvidence)
+// is the same real, deterministic logic from lib/walletRisk.ts / lib/entityRisk.ts.
+async function buildWalletEvidenceByEntityId(): Promise<Map<string, EntityWalletEvidence>> {
+  const [wallets, transactions] = await Promise.all([
+    prisma.wallet.findMany({ select: { id: true } }),
+    prisma.walletTransaction.findMany(),
+  ]);
+  const walletRiskById = scoreAllWallets(
+    wallets.map((w) => w.id),
+    transactions
+  );
+  return buildEntityWalletEvidence(walletRiskById, transactions);
+}
+
 async function calculateNetworkRisk(
-  entities: { alias: string }[]
+  entities: { id: string; alias: string }[]
 ) {
-  const vendorRiskByAlias = await buildVendorRiskMap();
+  const [vendorRiskByAlias, walletEvidenceByEntityId] = await Promise.all([
+    buildVendorRiskMap(),
+    buildWalletEvidenceByEntityId(),
+  ]);
 
   const entityRisks = entities.map((entity) =>
-    computeEntityRisk(entity.alias, vendorRiskByAlias)
+    computeEntityRisk(entity.alias, vendorRiskByAlias, walletEvidenceByEntityId, entity.id)
   );
 
   const aggregate = computeNetworkRiskAggregate(entityRisks);
@@ -49,15 +71,16 @@ async function calculateNetworkRisk(
 // listing evidence, exposed alongside so the two can be compared rather
 // than one silently masquerading as the other. See lib/networkRisk.ts.
 networksRouter.get("/", async (req, res) => {
-  const [networks, vendorRiskByAlias] = await Promise.all([
+  const [networks, vendorRiskByAlias, walletEvidenceByEntityId] = await Promise.all([
     prisma.network.findMany({
       include: { _count: { select: { entities: true } }, entities: true },
     }),
     buildVendorRiskMap(),
+    buildWalletEvidenceByEntityId(),
   ]);
 
   const out = networks.map((n) => {
-    const entityRisks = n.entities.map((e) => computeEntityRisk(e.alias, vendorRiskByAlias));
+    const entityRisks = n.entities.map((e) => computeEntityRisk(e.alias, vendorRiskByAlias, walletEvidenceByEntityId, e.id));
     const aggregate = computeNetworkRiskAggregate(entityRisks);
     const { entities, ...rest } = n; // keep list-view payload the same shape as before (no raw entity rows)
     return {
@@ -251,8 +274,11 @@ networksRouter.post("/:displayId/recalculate", async (req, res) => {
   });
   if (!network) return res.status(404).json({ error: "Network not found" });
 
-  const vendorRiskByAlias = await buildVendorRiskMap();
-  const entityRisks = network.entities.map((e) => computeEntityRisk(e.alias, vendorRiskByAlias));
+  const [vendorRiskByAlias, walletEvidenceByEntityId] = await Promise.all([
+    buildVendorRiskMap(),
+    buildWalletEvidenceByEntityId(),
+  ]);
+  const entityRisks = network.entities.map((e) => computeEntityRisk(e.alias, vendorRiskByAlias, walletEvidenceByEntityId, e.id));
   const aggregate = computeNetworkRiskAggregate(entityRisks);
 
   if (!aggregate.calculable || aggregate.computedBaselineRisk === null) {

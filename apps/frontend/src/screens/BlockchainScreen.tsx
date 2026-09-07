@@ -21,6 +21,13 @@ export function BlockchainScreen() {
           first: w.first ?? (w.firstSeen ? new Date(w.firstSeen).toLocaleDateString() : "—"),
           last: w.last ?? (w.lastSeen ? new Date(w.lastSeen).toLocaleDateString() : "—"),
           flagged: w.flagged ?? w.risk >= 70,
+          // `computed`/`dataQuality`/`legacy` come straight from /api/wallets
+          // (see lib/walletRisk.ts) — real transaction-derived risk, kept
+          // separate from the seeded demo `legacy` numbers rather than
+          // silently blended together.
+          computed: w.computed ?? null,
+          dataQuality: w.dataQuality ?? null,
+          legacy: w.legacy ?? null,
         }));
         setWalletRows(normalised);
         if (normalised.length > 0) setSel(normalised[0]);
@@ -78,6 +85,9 @@ export function BlockchainScreen() {
                       <div style={{display:"flex",alignItems:"center",gap:7}}>
                         <span style={{fontWeight:700,color:riskColorLight(w.risk)}}>{w.risk}</span>
                         <RiskBadge score={w.risk}/>
+                        {w.dataQuality === "no_transaction_data" && (
+                          <span title="No WalletTransaction records — score not calculable" className="mono-sm" style={{fontSize:9,color:"var(--text-4)"}}>N/A</span>
+                        )}
                       </div>
                     </td>
                     <td>{w.txns}</td>
@@ -116,6 +126,68 @@ export function BlockchainScreen() {
                 <div className="mono" style={{fontSize:13,fontWeight:600,color:"var(--text-2)"}}>{sel.first} – {sel.last}</div>
               </div>
             </div>
+          </div>
+          )}
+          {/* Wallet risk explanation — every number here comes straight from
+              lib/walletRisk.ts's computed signals for THIS wallet: real
+              WalletTransaction rows in, a deterministic score out. Signals
+              the current data can't support are shown as "Not available"
+              rather than a guessed number. */}
+          {sel && sel.computed && (
+          <div className="card" style={{padding:20}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+              <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)"}}>Risk Explanation — {sel.id}</div>
+              <span
+                className="mono-sm"
+                style={{
+                  fontSize:10,
+                  padding:"2px 8px",
+                  borderRadius:5,
+                  textTransform:"uppercase",
+                  letterSpacing:"0.05em",
+                  color: sel.dataQuality === "real_transaction_data" ? "var(--cyan)" : "var(--text-4)",
+                  border: `1px solid ${sel.dataQuality === "real_transaction_data" ? "var(--cyan)" : "var(--border)"}`,
+                }}
+              >
+                {sel.dataQuality === "real_transaction_data" ? "Computed from transactions" : "No transaction data"}
+              </span>
+            </div>
+            <div style={{fontSize:11,color:"var(--text-3)",marginBottom:14,lineHeight:1.55}}>{sel.computed.explanation}</div>
+
+            {sel.computed.calculable ? (
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {sel.computed.signals.map((s:any, i:number)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,padding:"7px 0",borderBottom:"1px solid var(--border)"}}>
+                    <span style={{fontSize:11.5,color: s.available ? "var(--text-2)" : "var(--text-4)",lineHeight:1.5}}>
+                      {s.available ? s.label : `${s.label} — Not available`}
+                      {!s.available && <span style={{display:"block",fontSize:10,color:"var(--text-4)",marginTop:2}}>{s.reason}</span>}
+                    </span>
+                    {s.available ? (
+                      <span className="mono-sm" style={{fontSize:11.5,fontWeight:700,color: s.value>0?"var(--high-light)":"var(--text-4)",whiteSpace:"nowrap"}}>+{s.value}</span>
+                    ) : (
+                      <span className="mono-sm" style={{fontSize:11,color:"var(--text-4)",whiteSpace:"nowrap"}}>—</span>
+                    )}
+                  </div>
+                ))}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:10,marginTop:2}}>
+                  <span style={{fontSize:12,fontWeight:600,color:"var(--text-1)"}}>Final calculated score</span>
+                  <span className="mono" style={{fontSize:16,fontWeight:700,color:riskColorLight(sel.computed.score)}}>{sel.computed.score}</span>
+                </div>
+              </div>
+            ) : (
+              <p style={{fontSize:11.5,color:"var(--text-4)"}}>
+                This wallet has no recorded WalletTransaction history, so a risk score cannot be honestly calculated. The value shown in the table is the seeded placeholder — see below.
+              </p>
+            )}
+
+            {sel.legacy && (
+              <div style={{marginTop:14,paddingTop:12,borderTop:"1px dashed var(--border)"}}>
+                <div style={{fontSize:10,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Seeded / Synthetic Demo Data</div>
+                <div style={{fontSize:11,color:"var(--text-4)",lineHeight:1.55}}>
+                  Stored demo value: risk {sel.legacy.risk}, {sel.legacy.txnCount} txns, {sel.legacy.entityCount} entities, {sel.legacy.totalVolume ?? "—"} volume. {sel.legacy.note}
+                </div>
+              </div>
+            )}
           </div>
           )}
         </div>

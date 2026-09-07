@@ -4,7 +4,7 @@ import { prisma } from "../lib/prisma.js";
 
 import { computeVendorRisk, type VendorRisk } from "../lib/vendorRisk.js";
 
-import { computeEntityRisk } from "../lib/entityRisk.js";
+import { computeEntityRisk, buildEntityWalletEvidence, type EntityWalletEvidence } from "../lib/entityRisk.js";
 
 import {
   correlateListings,
@@ -13,6 +13,8 @@ import {
 } from "../lib/entityCorrelation.js";
 
 import type { ListingInput } from "../lib/riskEngine.js";
+
+import { scoreAllWallets, type WalletRiskResult } from "../lib/walletRisk.js";
 
 import { logAudit, ipFromRequest } from "../lib/audit.js";
 
@@ -38,6 +40,49 @@ async function buildVendorRiskMap(): Promise<Map<string, VendorRisk>> {
   return computeVendorRisk(await buildListingInputs());
 }
 
+// Builds the wallet-derived evidence map keyed by entityId — see
+// lib/walletRisk.ts and lib/entityRisk.ts. Fetches all wallet ids + all
+// transactions once, scores every wallet deterministically, then groups by
+// the real WalletTransaction.entityId FK. This is what lets a wallet's
+// computed risk actually reach entity (and, from there, network) risk
+// instead of stopping at the Blockchain Intelligence screen.
+async function buildWalletEvidenceByEntityId(): Promise<{
+  walletEvidenceByEntityId: Map<string, EntityWalletEvidence>;
+  walletRiskById: Map<string, WalletRiskResult>;
+}> {
+  const [wallets, transactions] = await Promise.all([
+    prisma.wallet.findMany({ select: { id: true, displayId: true } }),
+    prisma.walletTransaction.findMany(),
+  ]);
+
+  const walletRiskById = scoreAllWallets(
+    wallets.map((w) => w.id),
+    transactions
+  );
+
+  const walletEvidenceByEntityId = buildEntityWalletEvidence(walletRiskById, transactions);
+
+  // Fill in walletDisplayIds (buildEntityWalletEvidence only has walletIds,
+  // not the human-readable displayId, since it has no DB access).
+  const displayIdById = new Map(wallets.map((w) => [w.id, w.displayId]));
+  const transactionsByEntity = new Map<string, Set<string>>();
+  for (const t of transactions) {
+    if (!t.entityId) continue;
+    const set = transactionsByEntity.get(t.entityId) ?? new Set<string>();
+    set.add(t.walletId);
+    transactionsByEntity.set(t.entityId, set);
+  }
+  for (const [entityId, evidence] of walletEvidenceByEntityId) {
+    const walletIds = transactionsByEntity.get(entityId) ?? new Set<string>();
+    evidence.walletDisplayIds = Array.from(walletIds)
+      .map((id) => displayIdById.get(id))
+      .filter((x): x is string => !!x)
+      .sort();
+  }
+
+  return { walletEvidenceByEntityId, walletRiskById };
+}
+
 // Correlation is intentionally computed independently of vendor/entity
 // risk (see lib/entityCorrelation.ts header): it answers "which listings
 // belong together", never "how risky this is". Reused as-is by the
@@ -54,6 +99,7 @@ async function buildCorrelationResult(): Promise<CorrelationResult> {
 // this change silently overwrites or removes existing fields.
 function attachComputedRisk(
   entity: {
+    id: string;
     alias: string;
     risk: number;
     confidence: number;
@@ -61,9 +107,10 @@ function attachComputedRisk(
     [key: string]: unknown;
   },
   vendorRiskByAlias: Map<string, VendorRisk>,
-  correlationResult: CorrelationResult
+  correlationResult: CorrelationResult,
+  walletEvidenceByEntityId: Map<string, EntityWalletEvidence>
 ) {
-  const computed = computeEntityRisk(entity.alias, vendorRiskByAlias);
+  const computed = computeEntityRisk(entity.alias, vendorRiskByAlias, walletEvidenceByEntityId, entity.id);
 
   // Additive field only — does not replace or feed into risk/confidence
   // above, which remain entirely owned by lib/entityRisk.ts. Correlation
@@ -116,6 +163,7 @@ function attachComputedRisk(
       correlationMethod: computed.correlationMethod,
       vendorAlias: computed.vendorAlias,
       evidence: computed.evidence,
+      walletEvidence: computed.walletEvidence,
       explanation: computed.explanation,
     },
 
@@ -134,7 +182,7 @@ function attachComputedRisk(
 
 // GET /api/entities — list, matches the Entities screen table
 entitiesRouter.get("/", async (_req, res) => {
-  const [entities, vendorRiskByAlias, correlationResult] = await Promise.all([
+  const [entities, vendorRiskByAlias, correlationResult, { walletEvidenceByEntityId }] = await Promise.all([
     prisma.entity.findMany({
       include: {
         identifiers: true,
@@ -144,10 +192,11 @@ entitiesRouter.get("/", async (_req, res) => {
 
     buildVendorRiskMap(),
     buildCorrelationResult(),
+    buildWalletEvidenceByEntityId(),
   ]);
 
   const calculatedEntities = entities.map((e) =>
-    attachComputedRisk(e, vendorRiskByAlias, correlationResult)
+    attachComputedRisk(e, vendorRiskByAlias, correlationResult, walletEvidenceByEntityId)
   );
 
   calculatedEntities.sort((a, b) => b.risk - a.risk);
@@ -157,7 +206,7 @@ entitiesRouter.get("/", async (_req, res) => {
 
 // GET /api/entities/:displayId — entity profile page
 entitiesRouter.get("/:displayId", async (req, res) => {
-  const [entity, vendorRiskByAlias, correlationResult] = await Promise.all([
+  const [entity, vendorRiskByAlias, correlationResult, { walletEvidenceByEntityId, walletRiskById }] = await Promise.all([
     prisma.entity.findUnique({
       where: {
         displayId: req.params.displayId,
@@ -194,6 +243,7 @@ entitiesRouter.get("/:displayId", async (req, res) => {
 
     buildVendorRiskMap(),
     buildCorrelationResult(),
+    buildWalletEvidenceByEntityId(),
   ]);
 
   if (!entity) {
@@ -210,11 +260,14 @@ entitiesRouter.get("/:displayId", async (req, res) => {
     ip: ipFromRequest(req),
   });
 
+  void walletRiskById; // per-entity summary is already attached via computed.walletEvidence; full per-wallet breakdowns are served by /api/wallets
+
   res.json(
     attachComputedRisk(
       entity,
       vendorRiskByAlias,
-      correlationResult
+      correlationResult,
+      walletEvidenceByEntityId
     )
   );
 });
