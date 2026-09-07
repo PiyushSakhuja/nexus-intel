@@ -7,6 +7,7 @@ import { computeVendorRisk, type VendorRisk } from "../lib/vendorRisk.js";
 import { computeEntityRisk } from "../lib/entityRisk.js";
 import { computeNetworkRiskAggregate } from "../lib/networkRisk.js";
 import type { ListingInput } from "../lib/riskEngine.js";
+import { logAudit, ipFromRequest } from "../lib/audit.js";
 
 export const graphRouter = Router();
 
@@ -37,7 +38,7 @@ async function buildVendorRiskMap(): Promise<Map<string, VendorRisk>> {
 // events, etc.) shows up automatically on the very next graph load — no
 // manual reseed required. Mirrors the "compute fresh on GET" pattern used
 // for network risk in routes/networks.ts.
-graphRouter.get("/", async (_req, res) => {
+graphRouter.get("/", async (req, res) => {
   await syncGraphFromEntities(prisma);
 
   const [nodes, edges] = await Promise.all([
@@ -130,6 +131,14 @@ graphRouter.get("/", async (_req, res) => {
     };
   });
 
+  await logAudit({
+    user: "System",
+    action: "Viewed Network Graph",
+    resource: `${enrichedNodes.length} nodes / ${edges.length} edges`,
+    type: "read",
+    ip: ipFromRequest(req),
+  });
+
   res.json({
     nodes: enrichedNodes,
     edges,
@@ -161,6 +170,14 @@ graphRouter.get("/:nodeId/expand", async (req, res) => {
       error: "Node not found",
     });
   }
+
+  await logAudit({
+    user: "System",
+    action: "Expanded Graph Node",
+    resource: node.label,
+    type: "read",
+    ip: ipFromRequest(req),
+  });
 
   res.json(node);
 });

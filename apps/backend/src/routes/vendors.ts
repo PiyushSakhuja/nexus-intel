@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { computeVendorRisk } from "../lib/vendorRisk.js";
 import type { ListingInput } from "../lib/riskEngine.js";
+import { logAudit, ipFromRequest } from "../lib/audit.js";
 
 export const vendorsRouter = Router();
 
@@ -27,9 +28,18 @@ async function loadListingInputs(): Promise<ListingInput[]> {
 //
 // vendorAlias is the correlation key. This is ALIAS CORRELATION, not
 // identity resolution — see lib/vendorRisk.ts for the full caveat.
-vendorsRouter.get("/", async (_req, res) => {
+vendorsRouter.get("/", async (req, res) => {
   const inputs = await loadListingInputs();
   const vendors = Array.from(computeVendorRisk(inputs).values()).sort((a, b) => b.risk - a.risk);
+
+  await logAudit({
+    user: "System",
+    action: "Viewed Vendors List",
+    resource: `${vendors.length} vendors`,
+    type: "read",
+    ip: ipFromRequest(req),
+  });
+
   res.json(vendors);
 });
 
@@ -38,5 +48,14 @@ vendorsRouter.get("/:vendorAlias", async (req, res) => {
   const inputs = await loadListingInputs();
   const vendor = computeVendorRisk(inputs).get(req.params.vendorAlias);
   if (!vendor) return res.status(404).json({ error: "Vendor not found" });
+
+  await logAudit({
+    user: "System",
+    action: "Viewed Vendor",
+    resource: vendor.vendorAlias,
+    type: "read",
+    ip: ipFromRequest(req),
+  });
+
   res.json(vendor);
 });

@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { computeVendorRisk } from "../lib/vendorRisk.js";
 import { computeEntityRisk } from "../lib/entityRisk.js";
 import type { ListingInput } from "../lib/riskEngine.js";
+import { logAudit, ipFromRequest } from "../lib/audit.js";
 
 export const dashboardRouter = Router();
 export const analyticsRouter = Router();
@@ -42,7 +43,7 @@ function lastNDays(n: number): string[] {
 // here is a hardcoded/typed-in number. Sparklines are built from the last 7
 // days of RiskEvent/Alert/Entity creation activity, so a quiet demo DB will
 // legitimately show flat/low sparklines rather than a fabricated trend.
-dashboardRouter.get("/kpis", async (_req, res) => {
+dashboardRouter.get("/kpis", async (req, res) => {
   const days = lastNDays(7);
 
   const [
@@ -135,6 +136,14 @@ dashboardRouter.get("/kpis", async (_req, res) => {
     },
   ];
 
+  await logAudit({
+    user: "System",
+    action: "Viewed Dashboard KPIs",
+    resource: "Overview",
+    type: "read",
+    ip: ipFromRequest(req),
+  });
+
   res.json({ kpis, generatedAt: new Date().toISOString() });
 });
 
@@ -144,7 +153,7 @@ dashboardRouter.get("/kpis", async (_req, res) => {
 // a running count), the endpoint returns real zero/derived values rather
 // than inventing numbers, and the frontend is expected to show an honest
 // "not enough data" state instead of a fake curve.
-analyticsRouter.get("/overview", async (_req, res) => {
+analyticsRouter.get("/overview", async (req, res) => {
   const days = lastNDays(30);
 
   const [alerts, entities, listings, networks, riskEvents] = await Promise.all([
@@ -240,6 +249,14 @@ analyticsRouter.get("/overview", async (_req, res) => {
     .sort((a, b) => b.risk - a.risk)
     .slice(0, 5)
     .map((n) => ({ id: n.displayId, risk: n.risk, change: n.change }));
+
+  await logAudit({
+    user: "System",
+    action: "Viewed Analytics Overview",
+    resource: "Analytics",
+    type: "read",
+    ip: ipFromRequest(req),
+  });
 
   res.json({
     activityTimeline,

@@ -5,6 +5,7 @@ import { computeEntityRisk } from "../lib/entityRisk.js";
 import { computeNetworkRiskAggregate } from "../lib/networkRisk.js";
 import { riskToStatus } from "../lib/riskStatus.js";
 import type { ListingInput } from "../lib/riskEngine.js";
+import { logAudit, ipFromRequest } from "../lib/audit.js";
 
 export const networksRouter = Router();
 
@@ -47,7 +48,7 @@ async function calculateNetworkRisk(
 // a fresh, always-current aggregate derived from each network's entities'
 // listing evidence, exposed alongside so the two can be compared rather
 // than one silently masquerading as the other. See lib/networkRisk.ts.
-networksRouter.get("/", async (_req, res) => {
+networksRouter.get("/", async (req, res) => {
   const [networks, vendorRiskByAlias] = await Promise.all([
     prisma.network.findMany({
       include: { _count: { select: { entities: true } }, entities: true },
@@ -70,6 +71,14 @@ networksRouter.get("/", async (_req, res) => {
     (b.computed.computedBaselineRisk ?? -1) -
     (a.computed.computedBaselineRisk ?? -1)
 );
+
+  await logAudit({
+    user: "System",
+    action: "Viewed Networks List",
+    resource: `${out.length} networks`,
+    type: "read",
+    ip: ipFromRequest(req),
+  });
 
   res.json(out);
 });
@@ -116,6 +125,14 @@ networksRouter.get("/:displayId", async (req, res) => {
     },
   };
 });
+
+  await logAudit({
+    user: "System",
+    action: "Viewed Network",
+    resource: network.displayId,
+    type: "read",
+    ip: ipFromRequest(req),
+  });
 
   res.json({
     ...network,
@@ -207,6 +224,14 @@ networksRouter.get("/:displayId/trajectory", async (req, res) => {
     })),
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
 
+  await logAudit({
+    user: "System",
+    action: "Viewed Network Trajectory",
+    resource: network.displayId,
+    type: "read",
+    ip: ipFromRequest(req),
+  });
+
   res.json({ ...network, events });
 });
 
@@ -254,6 +279,14 @@ networksRouter.post("/:displayId/recalculate", async (req, res) => {
       },
     }),
   ]);
+
+  await logAudit({
+    user: "System",
+    action: `Recalculated Network Risk (${network.risk} -> ${newRisk})`,
+    resource: network.displayId,
+    type: "write",
+    ip: ipFromRequest(req),
+  });
 
   res.json({ network: updatedNetwork, aggregate });
 });
