@@ -1,5 +1,15 @@
-import { useState, useCallback } from "react";
-import { entities } from "./data";
+import { useCallback, useEffect, useState } from "react";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 
 import { LoginScreen } from "./components/Login";
 import { Sidebar, Topbar } from "./components/Layout";
@@ -23,191 +33,308 @@ import { AuditScreen } from "./screens/AuditScreen";
 import { AdminScreen } from "./screens/AdminScreen";
 
 // ─── ROOT APP ─────────────────────────────────────────────────────────────
-// This file is now just routing + top-level auth state. Every screen lives
-// in its own file under ./screens — see README-SPLIT.md for the map of
-// who owns what.
+// Every screen now lives at its own real URL (react-router-dom), instead of
+// being switched in/out of a single in-memory `screen` state. That means:
+//   - the browser's back/forward buttons work
+//   - a page can be bookmarked, shared, or opened in a new tab
+//   - refreshing the page keeps you where you were, instead of bouncing to
+//     Overview
+// Every screen file (./screens/*) is UNCHANGED — they all still call the
+// `navigate(screen, data)` function they always did. `useCompatNavigate`
+// below is the only new piece: it translates that old-style call into a
+// real URL change, so nothing else in the app had to be rewritten.
+//
+// NOTE for deployment: because this is a client-side-routed SPA, your host
+// needs to serve index.html for *any* path (so a hard refresh or a shared
+// link to e.g. /workspace/CASE-004 doesn't 404). See vercel.json /
+// netlify.toml / public/_redirects included in this project for the two
+// most common hosts — most others (S3+CloudFront, nginx, Cloudflare Pages)
+// just need an equivalent "SPA fallback to index.html" rule.
 
-export default function App() {
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [screen, setScreen] = useState("overview");
-  const [entityData, setEntityData] = useState(entities[0]);
-  const [workspaceDisplayId, setWorkspaceDisplayId] = useState<string | null>(null);
-  const [networkDisplayId, setNetworkDisplayId] = useState<string | null>(null);
-  const [graphInvestigationId, setGraphInvestigationId] = useState<string | null>(null);
-  const [timelineDisplayId, setTimelineDisplayId] = useState<string | null>(null);
-  const [reportsDisplayId, setReportsDisplayId] = useState<string | null>(null);
-  const [alertsHighlightId, setAlertsHighlightId] = useState<string | null>(null);
-  const [blockchainSelectedId, setBlockchainSelectedId] = useState<string | null>(null);
-  const [listingsSelectedId, setListingsSelectedId] = useState<string | null>(null);
-  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
-  const [autoOpenNewInvestigation, setAutoOpenNewInvestigation] = useState(false);
-  const navigate = useCallback((s: string, data?: any) => {
-    if (s === "entity" && data) {
-      setEntityData(data);
+function extractId(data: any): string | undefined {
+  if (data === null || data === undefined) return undefined;
+  if (typeof data === "string") return data;
+  return data.displayId ?? data.id ?? undefined;
+}
+
+/**
+ * Builds a real URL for every (screen, data) pair the app's screens already
+ * call `navigate(...)` with. Mirrors exactly what the old App.tsx's switch
+ * statement used to do with local state — see the removed useState calls
+ * this replaced.
+ */
+function buildPath(screen: string, data?: any): string {
+  const enc = (id: string) => encodeURIComponent(id);
+
+  switch (screen) {
+    case "overview": return "/overview";
+    case "search": return "/search";
+    case "entities": return "/entities";
+    case "entity": {
+      const id = extractId(data);
+      return id ? `/entities/${enc(id)}` : "/entities";
     }
-
-    if (s === "workspace" && data) {
-      const displayId =
-        typeof data === "string"
-          ? data
-          : data.displayId ?? data.id;
-
-      if (displayId) {
-        setWorkspaceDisplayId(displayId);
+    case "alerts": {
+      const id = extractId(data);
+      return id ? `/alerts/${enc(id)}` : "/alerts";
+    }
+    case "graph": {
+      // Two independent things can arrive in `data`: a plain investigation
+      // id to scope the graph to (string, or { investigationId }), or a
+      // { focusEntityDisplayId } asking the global graph to auto-select one
+      // node. They're mutually exclusive in every call site today, so a
+      // focus request always means the *global* (unscoped) graph.
+      if (data && typeof data === "object" && "focusEntityDisplayId" in data && data.focusEntityDisplayId) {
+        return `/graph?focus=${enc(data.focusEntityDisplayId)}`;
       }
+      const investigationId = typeof data === "string" ? data : data?.investigationId ?? undefined;
+      return investigationId ? `/graph/${enc(investigationId)}` : "/graph";
     }
-
-    if (s === "timeline") {
-      // Timeline must always operate on the investigation the user came
-      // from — never fall back to "the first investigation" or stale
-      // state from a previous case. No `data` (or no displayId within it)
-      // means "no case context", and TimelineScreen resolves that itself
-      // with an honest empty/first-available state rather than this
-      // silently reusing whatever was viewed last.
-      const timelineId = data
-        ? typeof data === "string"
-          ? data
-          : data.displayId ?? data.id ?? null
-        : null;
-      setTimelineDisplayId(timelineId);
+    case "network-risk": {
+      const id = extractId(data);
+      return id ? `/network-risk/${enc(id)}` : "/network-risk";
     }
-
-    if (s === "reports") {
-      // Same principle as timeline: which investigation's report to
-      // preselect must come from where the user navigated from, not be
-      // left to ReportsScreen to guess.
-      const reportsId = data
-        ? typeof data === "string"
-          ? data
-          : data.displayId ?? data.id ?? null
-        : null;
-      setReportsDisplayId(reportsId);
+    case "listings": {
+      const id = extractId(data);
+      return id ? `/listings/${enc(id)}` : "/listings";
     }
-
-    if (s === "evidence" && data?.selectedId) {
-      setSelectedEvidenceId(data.selectedId);
-    } else if (s !== "evidence") {
-      // Reset selection when navigating away from evidence
-      setSelectedEvidenceId(null);
+    case "blockchain": {
+      const id = extractId(data);
+      return id ? `/blockchain/${enc(id)}` : "/blockchain";
     }
-
-    if (s === "graph") {
-      // No `data` (or data with no investigationId) -> global graph, same
-      // as before. Passing a displayId string or { investigationId } scopes
-      // GraphScreen to that investigation. Reset (rather than leaving
-      // stale) whenever "graph" is navigated to without one, so clicking
-      // the sidebar's generic Graph link never keeps a previous
-      // investigation's scoping around.
-      const investigationId = data
-        ? typeof data === "string"
-          ? data
-          : data.investigationId ?? null
-        : null;
-      setGraphInvestigationId(investigationId);
+    case "investigations":
+      return data?.openNew ? "/investigations?new=1" : "/investigations";
+    case "workspace": {
+      const id = extractId(data);
+      return id ? `/workspace/${enc(id)}` : "/workspace";
     }
-
-    if (s === "investigations") {
-      // Only auto-open the "New Investigation" modal when explicitly requested
-      // (e.g. from the Overview screen's "+ New Investigation" button).
-      setAutoOpenNewInvestigation(!!data?.openNew);
+    case "timeline": {
+      const id = extractId(data);
+      return id ? `/timeline/${enc(id)}` : "/timeline";
     }
-
-    if (s === "alerts") {
-      // Same principle as timeline/reports: which alert to jump to and
-      // highlight must come from where the user navigated from (e.g. the
-      // Overview screen's Live Intelligence Feed) — never left stale from
-      // a previous visit. No data (or no displayId within it) means "just
-      // open the alert list", same as clicking Alerts in the sidebar.
-      const alertId = data
-        ? typeof data === "string"
-          ? data
-          : data.displayId ?? data.id ?? null
-        : null;
-      setAlertsHighlightId(alertId);
+    case "evidence": {
+      const id = typeof data === "string" ? data : data?.selectedId ?? undefined;
+      return id ? `/evidence/${enc(id)}` : "/evidence";
     }
-
-    if (s === "blockchain") {
-      // Same principle as alerts/timeline/reports: which wallet to
-      // pre-select must come from where the user navigated from (e.g. a
-      // "Wallet Updated" row in Overview's Live Intelligence Feed).
-      const walletId = data
-        ? typeof data === "string"
-          ? data
-          : data.displayId ?? data.id ?? null
-        : null;
-      setBlockchainSelectedId(walletId);
+    case "analytics": return "/analytics";
+    case "reports": {
+      const id = extractId(data);
+      return id ? `/reports/${enc(id)}` : "/reports";
     }
+    case "audit": return "/audit";
+    case "admin": return "/admin";
+    default: return "/overview";
+  }
+}
 
-    if (s === "listings") {
-      // Same principle — which listing to pre-select comes from the
-      // event that linked here (e.g. a feed item with a resolved
-      // listingId), never left stale from a previous visit.
-      const listingId = data
-        ? typeof data === "string"
-          ? data
-          : data.displayId ?? data.id ?? null
-        : null;
-      setListingsSelectedId(listingId);
-    }
+/** Old call signature (`navigate("workspace", inv.id)`), new URL underneath. */
+function useCompatNavigate() {
+  const routerNavigate = useNavigate();
+  return useCallback(
+    (screen: string, data?: any) => {
+      routerNavigate(buildPath(screen, data));
+      // Every screen used to scroll `.main` back to top on navigation —
+      // preserved so long pages (Workspace, Entity, etc.) don't stay
+      // scrolled halfway down when you land on the next one.
+      setTimeout(() => {
+        document.querySelector(".main")?.scrollTo(0, 0);
+      }, 0);
+    },
+    [routerNavigate]
+  );
+}
 
-    if (s === "network-risk" && data) {
-      const displayId =
-        typeof data === "string"
-          ? data
-          : data.displayId ?? data.id;
+// Which sidebar/topbar nav item should be highlighted for a given path —
+// mirrors the old `screen` state key so Sidebar's existing active() logic
+// (entities/entity, investigations/workspace/timeline, graph/network-risk)
+// keeps working unchanged.
+function screenKeyFromPath(pathname: string): string {
+  if (pathname.startsWith("/entities/")) return "entity";
+  if (pathname.startsWith("/entities")) return "entities";
+  if (pathname.startsWith("/search")) return "search";
+  if (pathname.startsWith("/alerts")) return "alerts";
+  if (pathname.startsWith("/graph")) return "graph";
+  if (pathname.startsWith("/network-risk")) return "network-risk";
+  if (pathname.startsWith("/listings")) return "listings";
+  if (pathname.startsWith("/blockchain")) return "blockchain";
+  if (pathname.startsWith("/investigations")) return "investigations";
+  if (pathname.startsWith("/workspace")) return "workspace";
+  if (pathname.startsWith("/timeline")) return "timeline";
+  if (pathname.startsWith("/evidence")) return "evidence";
+  if (pathname.startsWith("/analytics")) return "analytics";
+  if (pathname.startsWith("/reports")) return "reports";
+  if (pathname.startsWith("/audit")) return "audit";
+  if (pathname.startsWith("/admin")) return "admin";
+  return "overview";
+}
 
-      if (displayId) {
-        setNetworkDisplayId(displayId);
-      }
-    }
-
-    setScreen(s);
-
-    setTimeout(() => {
-      document.querySelector(".main")?.scrollTo(0, 0);
-    }, 0);
-  }, []);
-
-  if (!loggedIn) return <LoginScreen onLogin={() => setLoggedIn(true)} />;
-
-  const renderScreen = () => {
-    switch (screen) {
-      case "overview": return <OverviewScreen navigate={navigate} />;
-      case "search": return <SearchScreen navigate={navigate} />;
-      case "alerts": return <AlertsScreen navigate={navigate} highlightId={alertsHighlightId} />;
-      case "entities": return <EntitiesScreen navigate={navigate} />;
-      case "entity": return <EntityScreen entity={entityData} navigate={navigate} />;
-      case "graph": return <GraphScreen navigate={navigate} investigationId={graphInvestigationId} />;
-      case "network-risk": return <NetworkRiskScreen navigate={navigate} displayId={networkDisplayId} />;
-      case "listings": return <ListingsScreen selectedId={listingsSelectedId} />;
-      case "blockchain": return <BlockchainScreen selectedId={blockchainSelectedId} />;
-      case "investigations": return <InvestigationsScreen navigate={navigate} autoOpenNew={autoOpenNewInvestigation} />;
-      case "workspace":
-        return (
-          <WorkspaceScreen
-            navigate={navigate}
-            displayId={workspaceDisplayId}
-          />
-        );
-      case "timeline": return <TimelineScreen navigate={navigate} displayId={timelineDisplayId} />;
-      case "evidence": return <EvidenceScreen selectedId={selectedEvidenceId} />;
-      case "analytics": return <AnalyticsScreen />;
-      case "reports": return <ReportsScreen navigate={navigate} preselectedDisplayId={reportsDisplayId} />;
-      case "audit": return <AuditScreen />;
-      case "admin": return <AdminScreen />;
-      default: return <OverviewScreen navigate={navigate} />;
-    }
-  };
-
-  const graphFull = screen === "graph";
+/** Shared chrome (topbar + sidebar) around every logged-in page. */
+function AppShell() {
+  const location = useLocation();
+  const navigate = useCompatNavigate();
+  const current = screenKeyFromPath(location.pathname);
+  const graphFull = current === "graph";
 
   return (
     <div className="app-shell">
       <Topbar navigate={navigate} />
-      <Sidebar current={screen} navigate={navigate} />
+      <Sidebar current={current} navigate={navigate} />
       <main className="main scroll-reveal" style={graphFull ? { overflow: "hidden" } : {}}>
-        {renderScreen()}
+        <Outlet />
       </main>
     </div>
+  );
+}
+
+// ─── Per-route pages ────────────────────────────────────────────────────
+// Each of these reads its id straight from the URL (via useParams /
+// useSearchParams) instead of from lifted-up App state, then renders the
+// same screen component with the same props it always got.
+
+function EntityPage() {
+  const { id } = useParams();
+  const navigate = useCompatNavigate();
+  // EntityScreen only ever uses this as a pre-fetch placeholder (it
+  // immediately fetches the authoritative record by id) — see
+  // EntityScreen.tsx's `source = live ?? entityProp`. So a bare
+  // { id, displayId } built straight from the URL is enough for a direct
+  // link or a refresh to work, exactly like coming from a click.
+  const entityData = { id, displayId: id } as any;
+  return <EntityScreen entity={entityData} navigate={navigate} />;
+}
+
+function GraphPage() {
+  const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  const navigate = useCompatNavigate();
+  return (
+    <GraphScreen
+      navigate={navigate}
+      investigationId={id ?? null}
+      focusEntityDisplayId={searchParams.get("focus")}
+    />
+  );
+}
+
+function NetworkRiskPage() {
+  const { id } = useParams();
+  const navigate = useCompatNavigate();
+  return <NetworkRiskScreen navigate={navigate} displayId={id ?? null} />;
+}
+
+function AlertsPage() {
+  const { id } = useParams();
+  const navigate = useCompatNavigate();
+  return <AlertsScreen navigate={navigate} highlightId={id ?? null} />;
+}
+
+function ListingsPage() {
+  const { id } = useParams();
+  return <ListingsScreen selectedId={id ?? null} />;
+}
+
+function BlockchainPage() {
+  return <BlockchainScreen />;
+}
+
+function InvestigationsPage() {
+  const [searchParams] = useSearchParams();
+  const navigate = useCompatNavigate();
+  return <InvestigationsScreen navigate={navigate} autoOpenNew={searchParams.get("new") === "1"} />;
+}
+
+function WorkspacePage() {
+  const { id } = useParams();
+  const navigate = useCompatNavigate();
+  return <WorkspaceScreen navigate={navigate} displayId={id ?? null} />;
+}
+
+function TimelinePage() {
+  const { id } = useParams();
+  const navigate = useCompatNavigate();
+  return <TimelineScreen navigate={navigate} displayId={id ?? null} />;
+}
+
+function EvidencePage() {
+  const { id } = useParams();
+  return <EvidenceScreen selectedId={id ?? null} />;
+}
+
+function ReportsPage() {
+  const { id } = useParams();
+  const navigate = useCompatNavigate();
+  return <ReportsScreen navigate={navigate} preselectedDisplayId={id ?? null} />;
+}
+
+function OverviewPage() {
+  const navigate = useCompatNavigate();
+  return <OverviewScreen navigate={navigate} />;
+}
+function SearchPage() {
+  const navigate = useCompatNavigate();
+  return <SearchScreen navigate={navigate} />;
+}
+function EntitiesPage() {
+  const navigate = useCompatNavigate();
+  return <EntitiesScreen navigate={navigate} />;
+}
+
+function AppRoutes() {
+  return (
+    <Routes>
+      <Route element={<AppShell />}>
+        <Route index element={<Navigate to="/overview" replace />} />
+        <Route path="overview" element={<OverviewPage />} />
+        <Route path="search" element={<SearchPage />} />
+        <Route path="alerts" element={<AlertsPage />} />
+        <Route path="alerts/:id" element={<AlertsPage />} />
+        <Route path="entities" element={<EntitiesPage />} />
+        <Route path="entities/:id" element={<EntityPage />} />
+        <Route path="graph" element={<GraphPage />} />
+        <Route path="graph/:id" element={<GraphPage />} />
+        <Route path="network-risk" element={<NetworkRiskPage />} />
+        <Route path="network-risk/:id" element={<NetworkRiskPage />} />
+        <Route path="listings" element={<ListingsPage />} />
+        <Route path="listings/:id" element={<ListingsPage />} />
+        <Route path="blockchain" element={<BlockchainPage />} />
+        <Route path="blockchain/:id" element={<BlockchainPage />} />
+        <Route path="investigations" element={<InvestigationsPage />} />
+        <Route path="workspace" element={<WorkspacePage />} />
+        <Route path="workspace/:id" element={<WorkspacePage />} />
+        <Route path="timeline" element={<TimelinePage />} />
+        <Route path="timeline/:id" element={<TimelinePage />} />
+        <Route path="evidence" element={<EvidencePage />} />
+        <Route path="evidence/:id" element={<EvidencePage />} />
+        <Route path="analytics" element={<AnalyticsScreen />} />
+        <Route path="reports" element={<ReportsPage />} />
+        <Route path="reports/:id" element={<ReportsPage />} />
+        <Route path="audit" element={<AuditScreen />} />
+        <Route path="admin" element={<AdminScreen />} />
+        <Route path="*" element={<Navigate to="/overview" replace />} />
+      </Route>
+    </Routes>
+  );
+}
+
+const AUTH_KEY = "nexus.loggedIn";
+
+export default function App() {
+  // Login is still a local/demo gate (no real backend auth yet — see
+  // components/Login.tsx), just persisted across refreshes now so that
+  // reloading a deep link like /workspace/CASE-004 doesn't bounce you back
+  // to the login screen.
+  const [loggedIn, setLoggedIn] = useState(() => sessionStorage.getItem(AUTH_KEY) === "1");
+
+  useEffect(() => {
+    if (loggedIn) sessionStorage.setItem(AUTH_KEY, "1");
+    else sessionStorage.removeItem(AUTH_KEY);
+  }, [loggedIn]);
+
+  if (!loggedIn) return <LoginScreen onLogin={() => setLoggedIn(true)} />;
+
+  return (
+    <BrowserRouter>
+      <AppRoutes />
+    </BrowserRouter>
   );
 }

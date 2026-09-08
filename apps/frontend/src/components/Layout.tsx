@@ -1,5 +1,25 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { PulseIndicator } from "./shared";
+
+// Bare (no-id) URL for each sidebar nav key — kept in sync with App.tsx's
+// buildPath() for these same screen keys. Sidebar items never carry an id,
+// so this is just the subset of buildPath that applies to them.
+const NAV_PATH: Record<string, string> = {
+  overview: "/overview",
+  search: "/search",
+  alerts: "/alerts",
+  entities: "/entities",
+  graph: "/graph",
+  listings: "/listings",
+  blockchain: "/blockchain",
+  investigations: "/investigations",
+  evidence: "/evidence",
+  analytics: "/analytics",
+  reports: "/reports",
+  audit: "/audit",
+  admin: "/admin",
+};
 
 export const NAV = [
   {key:"overview",   icon:"◈", label:"Overview"},
@@ -35,18 +55,18 @@ export function Sidebar({ current, navigate }: { current: string; navigate: (s: 
       <div style={{flex:1,padding:"8px 8px",overflowY:"auto"}} className="scroll-reveal">
         <div style={{fontSize:9,color:"var(--text-4)",letterSpacing:"0.1em",textTransform:"uppercase",padding:"6px 12px 4px"}}>Navigation</div>
         {NAV.map(n=>(
-          <div key={n.key} className={`nav-item ${active(n.key)?"active":""}`} onClick={()=>navigate(n.key)}>
+          <Link key={n.key} to={NAV_PATH[n.key] ?? "/overview"} className={`nav-item ${active(n.key)?"active":""}`} style={{textDecoration:"none"}}>
             <span style={{fontSize:13,flexShrink:0,opacity:active(n.key)?1:0.7}}>{n.icon}</span>
             <span className="label" style={{fontSize:12.5}}>{n.label}</span>
-          </div>
+          </Link>
         ))}
       </div>
 
       {/* Bottom */}
       <div style={{borderTop:"1px solid var(--border)",padding:"10px 8px"}}>
-        <div className={`nav-item ${current==="admin"?"active":""}`} onClick={()=>navigate("admin")}>
+        <Link to="/admin" className={`nav-item ${current==="admin"?"active":""}`} style={{textDecoration:"none"}}>
           <span style={{fontSize:13}}>⊞</span><span className="label">Admin</span>
-        </div>
+        </Link>
         <div style={{margin:"8px 4px 0",padding:"9px 12px",background:"rgba(99,102,241,0.08)",borderRadius:8,border:"1px solid rgba(99,102,241,0.14)"}}>
           <div style={{fontSize:12,fontWeight:600,color:"var(--text-1)"}}>Investigator A</div>
           <div style={{fontSize:10,color:"var(--accent-hi)",marginTop:1}}>Senior Investigator</div>
