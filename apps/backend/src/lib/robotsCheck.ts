@@ -16,8 +16,11 @@
 // responsible for making sure they have the right to crawl the sites they
 // submit — the ToS is a separate question this file can't check.
 
+import { guardUrl } from "./ssrfGuard.js";
+
 const USER_AGENT = "NexusIntelBot";
 const FETCH_TIMEOUT_MS = 5000;
+const MAX_ROBOTS_BYTES = 512 * 1024; // robots.txt is always small — cap generously and bail if a server sends something absurd
 
 interface RobotsRules {
   disallowedPaths: string[];
@@ -26,16 +29,26 @@ interface RobotsRules {
 const robotsCache = new Map<string, RobotsRules>();
 
 async function fetchRobotsTxt(origin: string): Promise<string | null> {
+  const robotsUrl = `${origin}/robots.txt`;
+  // Same SSRF guard as the page fetch itself — robots.txt is fetched from
+  // an operator-influenced origin, so it gets no less scrutiny than the
+  // page it's gating access to.
+  const guard = await guardUrl(robotsUrl);
+  if (!guard.ok) return null;
+
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    const res = await fetch(`${origin}/robots.txt`, {
+    const res = await fetch(robotsUrl, {
       signal: controller.signal,
+      redirect: "follow", // robots.txt redirects are low-risk (no body we trust beyond text) and common (bare domain -> www)
       headers: { "User-Agent": USER_AGENT },
     });
     clearTimeout(timeout);
     if (!res.ok) return null;
-    return await res.text();
+    const text = await res.text();
+    if (Buffer.byteLength(text) > MAX_ROBOTS_BYTES) return text.slice(0, MAX_ROBOTS_BYTES);
+    return text;
   } catch {
     return null; // unreachable robots.txt — see isAllowedByRobots for what this means
   }
