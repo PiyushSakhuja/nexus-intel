@@ -19,9 +19,12 @@
 //   - Resolving/creating the `network` and `entity` rows themselves.
 //     The button picks an existing entity; real ingestion will create
 //     new ones as vendors are first observed.
-//   - The cosmetic "event_detected" emit and its type/description text —
-//     the button alternates a label deterministically; real ingestion
-//     will just describe the real event.
+//   - Choosing the triggerType/triggerDescription text itself — the
+//     button alternates a label deterministically; real ingestion just
+//     passes through whatever the producer's staging pool row says.
+//     The actual "event_detected" Socket.IO emit now happens IN HERE
+//     (not the caller) so it can carry a real listingId/entityDisplayId
+//     once one resolves — see below.
 //   - The "action" audit log entry for the outer request (e.g.
 //     "Simulated Incoming Intelligence" vs. a future "Live Intelligence
 //     Ingested") — only the ALERT-specific audit entry below stays in
@@ -115,6 +118,29 @@ export async function runIntelligencePipeline(
       shipsFrom: l.shipsFrom,
     }));
 
+    // Resolved BEFORE the "event_detected" emit (moved into this function
+    // from the callers, see below) so the feed entry for this event can
+    // link straight to the real, existing listing this event is actually
+    // about — instead of a "New Listing" row with nothing behind it.
+    // Never invented: if this vendor has no real listing evidence yet,
+    // listingId is honestly null and the feed entry just isn't clickable.
+    const normalizedAlias = normalizeVendorAlias(entity.alias);
+    const ownListings = listings.filter(
+      (l) => normalizeVendorAlias(l.vendorAlias ?? "") === normalizedAlias
+    );
+    const mostRecentOwnListing =
+      ownListings.length > 0
+        ? ownListings.reduce((latest, l) => (l.lastSeen > latest.lastSeen ? l : latest))
+        : null;
+
+    emit("event_detected", {
+      type: triggerType,
+      description: triggerDescription,
+      entity: entity.alias,
+      entityDisplayId: entity.displayId,
+      listingId: mostRecentOwnListing?.displayId ?? null,
+    });
+
     const correlationGroup = getCorrelationForAlias(entity.alias, correlateListings(inputs));
     correlationSummary = {
       entity: entity.alias,
@@ -123,9 +149,11 @@ export async function runIntelligencePipeline(
     };
     emit("correlation", {
       entity: entity.alias,
+      entityDisplayId: entity.displayId,
       confidence: correlationSummary.confidence,
       method: correlationSummary.method,
       matchedSignals: correlationGroup?.matchedSignals ?? [],
+      listingId: mostRecentOwnListing?.displayId ?? null,
     });
 
     const vendorRiskByAlias = computeVendorRisk(inputs);
@@ -139,15 +167,6 @@ export async function runIntelligencePipeline(
     }
 
     // ── Wallet step (new) ──────────────────────────────────────────────
-    const normalizedAlias = normalizeVendorAlias(entity.alias);
-    const ownListings = listings.filter(
-      (l) => normalizeVendorAlias(l.vendorAlias ?? "") === normalizedAlias
-    );
-    const mostRecentOwnListing =
-      ownListings.length > 0
-        ? ownListings.reduce((latest, l) => (l.lastSeen > latest.lastSeen ? l : latest))
-        : null;
-
     wallet = await processWalletForListing({
       vendorAlias: entity.alias,
       entityId: entity.id,
@@ -157,17 +176,28 @@ export async function runIntelligencePipeline(
     emit("wallet_updated", {
       wallet: wallet.wallet.displayId,
       entity: entity.alias,
+      entityDisplayId: entity.displayId,
       transactionId: wallet.transaction.id,
       amountBtcEq: wallet.transaction.amountBtcEq,
       direction: wallet.transaction.direction,
+      listingId: mostRecentOwnListing?.displayId ?? null,
+    });
+  } else {
+    // No entity at all — preserves the original behavior of not emitting
+    // a correlation event, and skips the wallet step (nothing to
+    // honestly attribute a wallet to). Still surfaces the cosmetic
+    // event_detected, just with no entity/listing to link to.
+    emit("event_detected", {
+      type: triggerType,
+      description: triggerDescription,
+      entity: null,
+      entityDisplayId: null,
+      listingId: null,
     });
   }
-  // else: no entity at all — preserves the original behavior of not
-  // emitting a correlation event, and now also skips the wallet step
-  // (nothing to honestly attribute a wallet to).
 
-  const { delta: scoreDelta, explanation: deltaExplanation } = computeSimulateScoreDelta(deltaInput);
-  const newNetworkRisk = Math.min(100, network.risk + scoreDelta);
+  const { delta: scoreDelta, explanation: deltaExplanation } = computeSimulateScoreDelta(deltaInput, network.risk);
+  const newNetworkRisk = Math.max(0, Math.min(100, network.risk + scoreDelta));
   const status = riskToStatus(newNetworkRisk);
 
   const riskEvent = await prisma.riskEvent.create({

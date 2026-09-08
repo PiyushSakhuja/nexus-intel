@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { getIo } from "../sockets/io.js";
 import { runIntelligencePipeline } from "../lib/intelligencePipeline.js";
 import { logAudit, ipFromRequest } from "../lib/audit.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
@@ -38,9 +37,6 @@ simulateRouter.post("/event", asyncHandler(async (req, res) => {
     return res.status(400).json({ error: "networkDisplayId is required" });
   }
 
-  const io = getIo();
-  const emit = (type: string, payload: unknown) => io.emit("intelligence-event", { type, payload, at: new Date() });
-
   const network = await prisma.network.findUnique({
     where: { displayId: networkDisplayId },
     include: { entities: true },
@@ -48,14 +44,16 @@ simulateRouter.post("/event", asyncHandler(async (req, res) => {
   if (!network) return res.status(404).json({ error: "Network not found" });
 
   // 1. New listing/transaction event detected. Deterministic selection —
-  // alternates based on the real total RiskEvent count so far.
+  // alternates based on the real total RiskEvent count so far. The
+  // actual "event_detected" broadcast (now carrying a real listing/entity
+  // reference when one resolves) happens inside runIntelligencePipeline,
+  // not here — see that file's header.
   const eventTypes = [
     { type: "listing_detected", description: "New listing detected on monitored source" },
     { type: "transaction_detected", description: "New blockchain transaction detected" },
   ];
   const priorEventCount = await prisma.riskEvent.count();
   const chosen = eventTypes[priorEventCount % eventTypes.length];
-  emit("event_detected", chosen);
 
   // 2. Entity resolution — unchanged from before.
   const entity =
@@ -66,7 +64,7 @@ simulateRouter.post("/event", asyncHandler(async (req, res) => {
   // 3. Correlate -> risk -> alert -> wallet. All in intelligencePipeline.ts.
   const result = await runIntelligencePipeline({
     network,
-    entity : null,
+    entity,
     triggerType: chosen.type,
     triggerDescription: chosen.description,
     ip: ipFromRequest(req),

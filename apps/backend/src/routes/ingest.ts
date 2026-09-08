@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { getIo } from "../sockets/io.js";
 import { runIntelligencePipeline } from "../lib/intelligencePipeline.js";
 import { logAudit, ipFromRequest } from "../lib/audit.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
@@ -52,9 +51,6 @@ ingestRouter.post("/event", asyncHandler(async (req, res) => {
     return res.status(400).json({ error: "networkDisplayId is required" });
   }
 
-  const io = getIo();
-  const emit = (type: string, payload: unknown) => io.emit("intelligence-event", { type, payload, at: new Date() });
-
   const network = await prisma.network.findUnique({
     where: { displayId: networkDisplayId },
     include: { entities: true },
@@ -63,12 +59,13 @@ ingestRouter.post("/event", asyncHandler(async (req, res) => {
 
   // Event label: caller-supplied (the staging pool row already knows what
   // it is). Falls back to the same default the "Simulate" button starts
-  // from if the row didn't carry one.
+  // from if the row didn't carry one. The actual "event_detected"
+  // broadcast (now carrying a real listing/entity reference when one
+  // resolves) happens inside runIntelligencePipeline, not here.
   const chosen = {
     type: eventType?.trim() || "listing_detected",
     description: description?.trim() || "New listing detected on monitored source",
   };
-  emit("event_detected", chosen);
 
   const entity =
     (entityDisplayId && (await prisma.entity.findUnique({ where: { displayId: entityDisplayId } }))) ??
@@ -77,7 +74,7 @@ ingestRouter.post("/event", asyncHandler(async (req, res) => {
 
   const result = await runIntelligencePipeline({
     network,
-    entity: null,
+    entity,
     triggerType: chosen.type,
     triggerDescription: chosen.description,
     ip: ipFromRequest(req),

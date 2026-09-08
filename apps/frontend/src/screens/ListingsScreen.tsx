@@ -1,119 +1,259 @@
-import { useState, useEffect } from "react";
-import { riskColorLight, riskBg, riskBorder } from "../data";
-import { RingScore, RiskBadge } from "../components/shared";
+import { useState, useEffect, useRef } from "react";
+import { riskColorLight } from "../data";
+import { RingScore, RiskBadge, PulseIndicator } from "../components/shared";
 import { apiGet } from "../lib/api";
+import { getSocket } from "../lib/socket";
 
-export function ListingsScreen() {
-  const [rows, setRows] = useState<any[]>([]);
-  const [sel, setSel] = useState<any|null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string|null>(null);
+export function BlockchainScreen({ selectedId }: { selectedId?: string | null } = {}) {
+  const [walletRows, setWalletRows] = useState<any[]>([]);
+  const [walletsLoading, setWalletsLoading] = useState(true);
+  const [walletsError, setWalletsError] = useState<string|null>(null);
+  const [sel, setSel] = useState<any>(null);
+  const selRef = useRef<any>(null);
+  useEffect(() => { selRef.current = sel; }, [sel]);
 
+  const loadWallets = (preferId?: string | null) => {
+    apiGet<any[]>("/api/wallets")
+      .then(data => {
+        const normalised = data.map((w: any) => ({
+          ...w,
+          // `id` shown/matched against everywhere in this screen is the
+          // human-readable displayId (e.g. "WALLET-..."), not the raw
+          // Prisma cuid — same convention Overview's Wallet Activity card
+          // uses (see OverviewScreen.tsx's loadWallets).
+          id: w.displayId ?? w.id,
+          txns: w.txns ?? w.txnCount ?? 0,
+          entities: w.entities ?? w.entityCount ?? 0,
+          cluster: w.cluster ?? w.clusterId ?? "—",
+          totalVol: w.totalVol ?? w.totalVolume ?? "—",
+          first: w.first ?? (w.firstSeen ? new Date(w.firstSeen).toLocaleDateString() : "—"),
+          last: w.last ?? (w.lastSeen ? new Date(w.lastSeen).toLocaleDateString() : "—"),
+          flagged: w.flagged ?? w.risk >= 70,
+          // `computed`/`dataQuality`/`legacy` come straight from /api/wallets
+          // (see lib/walletRisk.ts) — real transaction-derived risk, kept
+          // separate from the seeded demo `legacy` numbers rather than
+          // silently blended together.
+          computed: w.computed ?? null,
+          dataQuality: w.dataQuality ?? null,
+          legacy: w.legacy ?? null,
+        }));
+        setWalletRows(normalised);
+        const wanted = preferId ?? selRef.current?.id;
+        const match = wanted ? normalised.find(w => w.id === wanted) : null;
+        if (match) setSel(match);
+        else if (normalised.length > 0 && !selRef.current) setSel(normalised[0]);
+        setWalletsError(null);
+      })
+      .catch(err => setWalletsError(err.message))
+      .finally(() => setWalletsLoading(false));
+  };
+
+  useEffect(() => { loadWallets(selectedId ?? undefined); }, []);
+
+  // Deep-link from elsewhere (e.g. Overview's Live Intelligence Feed):
+  // select the specific wallet referenced by the event once its data is
+  // in hand.
   useEffect(() => {
-    apiGet<any[]>("/api/listings")
-      .then(data => { setRows(data); setError(null); })
-      .catch(err => setError(err.message))
-      .finally(() => setLoading(false));
+    if (!selectedId) return;
+    const match = walletRows.find(w => w.id === selectedId);
+    if (match) setSel(match);
+  }, [selectedId, walletRows]);
+
+  // Wallet risk is computed from the full population of real
+  // WalletTransaction rows, so any new transaction (see
+  // lib/walletUpdate.ts / intelligencePipeline.ts) can shift scores —
+  // re-pull rather than leaving this screen stale until a manual reload.
+  useEffect(() => {
+    const socket = getSocket();
+    const onEvent = (evt: any) => {
+      if (evt.type === "wallet_updated") loadWallets();
+    };
+    socket.on("intelligence-event", onEvent);
+    return () => { socket.off("intelligence-event", onEvent); };
   }, []);
 
-  const fmtDate = (v:any) => {
-    if (!v) return "—";
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? String(v) : d.toLocaleDateString();
-  };
-  const signalsList = (v:any): string[] => Array.isArray(v) ? v : [];
-  const signalsLabel = (v:any) => Array.isArray(v) ? (v.length ? v.join(", ") : "—") : (v!=null ? `${v} detected` : "—");
-  const priceLabel = (v:any) => v!=null ? `$${Number(v).toFixed(2)}` : "—";
+  // Derived from walletRows once the /api/wallets fetch resolves — real
+  // numbers, computed here rather than a separately-maintained hardcoded KPI set.
+  const totalTxns = walletRows.reduce((sum, w) => sum + (w.txns ?? 0), 0);
+  const blockKpis = [
+    {label:"Tracked Wallets",val:String(walletRows.length),color:"#6366f1"},
+    {label:"High-Risk Wallets",val:String(walletRows.filter(w=>w.risk>=70).length),color:"var(--critical)"},
+    {label:"Transactions Analysed",val: totalTxns>=1000 ? `${(totalTxns/1000).toFixed(1)}K` : String(totalTxns), color:"var(--cyan)"},
+    {label:"Emerging Clusters",val:String(new Set(walletRows.map(w=>w.cluster)).size),color:"var(--purple)"},
+  ];
 
   return (
     <div style={{padding:"26px 28px"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
-        <div>
-          <h1 className="section-head">Listings Intelligence</h1>
-          <p className="page-sub">Flagged intelligence records from tracked marketplaces. No purchase functionality.</p>
-        </div>
+      <div style={{marginBottom:22}}>
+        <h1 className="section-head">Blockchain Intelligence</h1>
+        <p className="page-sub">Wallet analytics and transaction pattern analysis.</p>
       </div>
-      {loading && <p className="page-sub" style={{marginBottom:12}}>Loading listings…</p>}
-      {error && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({error}).</p>}
-      {!loading && !error && rows.length === 0 && <p className="page-sub" style={{marginBottom:12}}>No listings recorded yet.</p>}
-      <div style={{display:"grid",gridTemplateColumns:sel?"minmax(0, 1fr) minmax(300px, 360px)":"minmax(0, 1fr)",gap:16,transition:"all 0.25s",alignItems:"start"}}>
-        <div className="card" style={{minWidth:0,overflowX:"auto"}}>
-          <table className="data-table" style={{minWidth:1080}}>
-            <thead><tr><th>Record ID</th><th>Marketplace</th><th>Vendor</th><th>Title</th><th>Category</th><th>Risk</th><th>Price</th><th>First Seen</th><th>Last Seen</th><th>Status</th></tr></thead>
-            <tbody>
-              {rows.map(l=>(
-                <tr key={l.id} className={sel?.id===l.id?"selected":""} onClick={()=>setSel(l.id===sel?.id?null:l)}>
-                  <td><span className="mono" style={{color:"var(--accent-hi)",fontSize:12}}>{l.displayId ?? l.id}</span></td>
-                  <td>{l.marketplace ?? (typeof l.source === "string" ? l.source : l.source?.name) ?? "—"}</td>
-                  <td>{l.vendorAlias ?? "—"}</td>
-                  <td style={{maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={l.title ?? undefined}>{l.title ?? "—"}</td>
-                  <td><span className="badge badge-accent" style={{fontSize:9}}>{l.category}</span></td>
-                  <td>
-                    <div style={{display:"flex",alignItems:"center",gap:7}}>
-                      <span style={{fontWeight:700,color:riskColorLight(l.risk)}}>{l.risk}</span>
-                      <RiskBadge score={l.risk}/>
-                    </div>
-                  </td>
-                  <td>{priceLabel(l.priceUsd)}</td>
-                  <td>{fmtDate(l.firstSeen ?? l.first)}</td>
-                  <td>{fmtDate(l.lastSeen ?? l.last)}</td>
-                  <td>
-                    <span style={{fontSize:11,padding:"2px 8px",borderRadius:4,background:l.status==="Flagged"||l.status==="flagged"?riskBg(80):l.status==="Under Review"?riskBg(60):l.status==="Monitoring"?riskBg(40):"rgba(255,255,255,0.04)",color:l.status==="Flagged"||l.status==="flagged"?riskColorLight(80):l.status==="Under Review"?riskColorLight(60):l.status==="Monitoring"?riskColorLight(40):"var(--text-3)",border:`1px solid ${l.status==="Flagged"||l.status==="flagged"?riskBorder(80):l.status==="Under Review"?riskBorder(60):l.status==="Monitoring"?riskBorder(40):"var(--border)"}`}}>{l.status}</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
 
-        {sel && (
-          <div className="card anim-slide-r" style={{padding:20,minWidth:0,width:"100%",boxSizing:"border-box",height:"fit-content",maxHeight:"calc(100vh - 120px)",overflowY:"auto",position:"sticky",top:16}}>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}>
-              <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)"}}>Record Details</div>
-              <button onClick={()=>setSel(null)} style={{background:"none",border:"none",color:"var(--text-4)",cursor:"pointer",fontSize:20,lineHeight:1}}>×</button>
-            </div>
-            <div className="mono" style={{fontSize:11,color:"var(--accent-hi)",marginBottom:4}}>{sel.displayId ?? sel.id}</div>
-            {sel.title && <div style={{fontSize:13,color:"var(--text-1)",marginBottom:12}}>{sel.title}</div>}
-            <div style={{display:"flex",justifyContent:"center",marginBottom:16}}><RingScore score={sel.risk} size={100}/></div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:13,marginBottom:20}}>
+        {blockKpis.map(k=>(
+          <div key={k.label} className="card" style={{padding:"16px 18px"}}>
+            <div style={{fontSize:10,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:8}}>{k.label}</div>
+            <div className="display" style={{fontSize:28,fontWeight:700,color:k.color}}>{k.val}</div>
+          </div>
+        ))}
+      </div>
 
-            {[
-              {l:"Marketplace",v:sel.marketplace ?? (typeof sel.source === "string" ? sel.source : sel.source?.name) ?? "—"},
-              {l:"Vendor",v:sel.vendorAlias ?? "—"},
-              {l:"Category",v:sel.category},
-              {l:"Risk Score",v:`${sel.risk} / 100`},
-              {l:"Price (USD)",v:priceLabel(sel.priceUsd)},
-              {l:"Ships From",v:sel.shipsFrom ?? "—"},
-              {l:"First Seen",v:fmtDate(sel.firstSeen ?? sel.first)},{l:"Last Seen",v:fmtDate(sel.lastSeen ?? sel.last)},{l:"Status",v:sel.status},
-            ].map(item=>(
-              <div key={item.l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
-                <span style={{fontSize:11,color:"var(--text-4)"}}>{item.l}</span>
-                <span style={{fontSize:12,color:"var(--text-2)",textAlign:"right",overflowWrap:"anywhere",maxWidth:"62%"}}>{item.v}</span>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:16}}>
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          {/* Wallet table */}
+          {walletsLoading && <p className="page-sub" style={{marginBottom:8,paddingLeft:16}}>Loading wallets…</p>}
+          {walletsError && <p className="page-sub" style={{marginBottom:8,paddingLeft:16,color:"var(--high-light)"}}>Couldn't reach the API ({walletsError}).</p>}
+          {!walletsLoading && !walletsError && walletRows.length === 0 && <p className="page-sub" style={{marginBottom:8,paddingLeft:16}}>No wallets tracked yet.</p>}
+          <div className="card">
+            <table className="data-table">
+              <thead><tr><th>Wallet ID</th><th>Risk</th><th>Transactions</th><th>Entities</th><th>Cluster</th><th>Volume</th><th>Last Active</th></tr></thead>
+              <tbody>
+                {walletRows.map(w=>(
+                  <tr key={w.id} className={sel?.id===w.id?"selected":""} onClick={()=>setSel(w)}>
+                    <td>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        {w.flagged&&<div style={{width:6,height:6,borderRadius:"50%",background:"var(--critical)",boxShadow:"0 0 5px var(--critical-glow)",flexShrink:0}}/>}
+                        <span className="mono" style={{color:"var(--cyan)",fontSize:12}}>{w.id}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{display:"flex",alignItems:"center",gap:7}}>
+                        <span style={{fontWeight:700,color:riskColorLight(w.risk)}}>{w.risk}</span>
+                        <RiskBadge score={w.risk}/>
+                        {w.dataQuality === "no_transaction_data" && (
+                          <span title="No WalletTransaction records — score not calculable" className="mono-sm" style={{fontSize:9,color:"var(--text-4)"}}>N/A</span>
+                        )}
+                      </div>
+                    </td>
+                    <td>{w.txns}</td>
+                    <td>{w.entities}</td>
+                    <td><span className="mono-sm" style={{color:"var(--accent-hi)"}}>{w.cluster}</span></td>
+                    <td><span className="mono-sm" style={{color:"var(--text-3)"}}>{w.totalVol}</span></td>
+                    <td><span style={{fontSize:11}}>{w.last.split(",")[0]}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Wallet summary — no per-day transaction volume exists in the
+              schema (Wallet has no time-series data), so this shows real
+              aggregate fields instead of a fabricated bar chart. */}
+          {sel && (
+          <div className="card" style={{padding:20}}>
+            <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:4}}>Wallet Summary — {sel.id}</div>
+            <div style={{fontSize:11,color:"var(--text-3)",marginBottom:16}}>Aggregate figures from the wallet record</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:14}}>
+              <div>
+                <div style={{fontSize:10,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.06em"}}>Total Volume</div>
+                <div className="mono" style={{fontSize:18,fontWeight:700,color:"var(--text-1)"}}>{sel.totalVol}</div>
               </div>
-            ))}
+              <div>
+                <div style={{fontSize:10,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.06em"}}>Transactions</div>
+                <div className="mono" style={{fontSize:18,fontWeight:700,color:"var(--text-1)"}}>{sel.txns}</div>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.06em"}}>Linked Entities</div>
+                <div className="mono" style={{fontSize:18,fontWeight:700,color:"var(--text-1)"}}>{sel.entities}</div>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.06em"}}>Active Window</div>
+                <div className="mono" style={{fontSize:13,fontWeight:600,color:"var(--text-2)"}}>{sel.first} – {sel.last}</div>
+              </div>
+            </div>
+          </div>
+          )}
+          {/* Wallet risk explanation — every number here comes straight from
+              lib/walletRisk.ts's computed signals for THIS wallet: real
+              WalletTransaction rows in, a deterministic score out. Signals
+              the current data can't support are shown as "Not available"
+              rather than a guessed number. */}
+          {sel && sel.computed && (
+          <div className="card" style={{padding:20}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+              <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)"}}>Risk Explanation — {sel.id}</div>
+              <span
+                className="mono-sm"
+                style={{
+                  fontSize:10,
+                  padding:"2px 8px",
+                  borderRadius:5,
+                  textTransform:"uppercase",
+                  letterSpacing:"0.05em",
+                  color: sel.dataQuality === "real_transaction_data" ? "var(--cyan)" : "var(--text-4)",
+                  border: `1px solid ${sel.dataQuality === "real_transaction_data" ? "var(--cyan)" : "var(--border)"}`,
+                }}
+              >
+                {sel.dataQuality === "real_transaction_data" ? "Computed from transactions" : "No transaction data"}
+              </span>
+            </div>
+            <div style={{fontSize:11,color:"var(--text-3)",marginBottom:14,lineHeight:1.55}}>{sel.computed.explanation}</div>
 
-            {(sel.patterns ?? signalsList(sel.signals)).length>0 && (
-              <div style={{marginTop:14}}>
-                <div style={{fontSize:11,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:8}}>Detected Patterns</div>
-                {(sel.patterns ?? signalsList(sel.signals)).map((p:string)=>(
-                  <div key={p} style={{display:"flex",gap:7,alignItems:"center",marginBottom:6}}>
-                    <div style={{width:5,height:5,borderRadius:"50%",background:"var(--accent)",flexShrink:0}}/>
-                    <span style={{fontSize:12,color:"var(--text-2)"}}>{p}</span>
+            {sel.computed.calculable ? (
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {sel.computed.signals.map((s:any, i:number)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,padding:"7px 0",borderBottom:"1px solid var(--border)"}}>
+                    <span style={{fontSize:11.5,color: s.available ? "var(--text-2)" : "var(--text-4)",lineHeight:1.5}}>
+                      {s.available ? s.label : `${s.label} — Not available`}
+                      {!s.available && <span style={{display:"block",fontSize:10,color:"var(--text-4)",marginTop:2}}>{s.reason}</span>}
+                    </span>
+                    {s.available ? (
+                      <span className="mono-sm" style={{fontSize:11.5,fontWeight:700,color: s.value>0?"var(--high-light)":"var(--text-4)",whiteSpace:"nowrap"}}>+{s.value}</span>
+                    ) : (
+                      <span className="mono-sm" style={{fontSize:11,color:"var(--text-4)",whiteSpace:"nowrap"}}>—</span>
+                    )}
                   </div>
                 ))}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:10,marginTop:2}}>
+                  <span style={{fontSize:12,fontWeight:600,color:"var(--text-1)"}}>Final calculated score</span>
+                  <span className="mono" style={{fontSize:16,fontWeight:700,color:riskColorLight(sel.computed.score)}}>{sel.computed.score}</span>
+                </div>
               </div>
+            ) : (
+              <p style={{fontSize:11.5,color:"var(--text-4)"}}>
+                This wallet has no recorded WalletTransaction history, so a risk score cannot be honestly calculated. The value shown in the table is the seeded placeholder — see below.
+              </p>
             )}
 
-            {(sel.entities ?? []).length>0 && (
-              <div style={{marginTop:12}}>
-                <div style={{fontSize:11,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:8}}>Related Entities</div>
-                {sel.entities.map((e:string)=>(
-                  <span key={e} className="mono-sm" style={{display:"inline-block",margin:"0 6px 6px 0",background:"var(--accent-dim)",border:"1px solid rgba(99,102,241,0.22)",borderRadius:4,padding:"2px 8px",color:"var(--accent-hi)"}}>{e}</span>
-                ))}
+            {sel.legacy && (
+              <div style={{marginTop:14,paddingTop:12,borderTop:"1px dashed var(--border)"}}>
+                <div style={{fontSize:10,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:4}}>Seeded / Synthetic Demo Data</div>
+                <div style={{fontSize:11,color:"var(--text-4)",lineHeight:1.55}}>
+                  Stored demo value: risk {sel.legacy.risk}, {sel.legacy.txnCount} txns, {sel.legacy.entityCount} entities, {sel.legacy.totalVolume ?? "—"} volume. {sel.legacy.note}
+                </div>
               </div>
             )}
-
-            <button className="btn btn-primary" style={{width:"100%",justifyContent:"center",marginTop:16}}>Add to Investigation</button>
           </div>
+          )}
+        </div>
+
+        {/* Wallet detail */}
+        {sel && (
+        <div className="card" style={{padding:20,height:"fit-content"}}>
+          <div style={{fontSize:10.5,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Selected Wallet</div>
+          <div className="mono" style={{fontSize:14,fontWeight:600,color:"var(--cyan)",marginBottom:8}}>{sel.id}</div>
+          <RiskBadge score={sel.risk}/>
+          <div style={{display:"flex",justifyContent:"center",margin:"18px 0"}}><RingScore score={sel.risk} size={110}/></div>
+
+          {sel.flagged && (
+            <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:"rgba(220,38,38,0.07)",border:"1px solid rgba(220,38,38,0.2)",borderRadius:7,marginBottom:14}}>
+              <PulseIndicator color="var(--critical)"/>
+              <span style={{fontSize:11.5,color:"var(--critical-light)",fontWeight:600}}>Network association detected</span>
+            </div>
+          )}
+
+          {[
+            {l:"Transactions",v:sel.txns},{l:"Connected Entities",v:sel.entities},
+            {l:"Cluster",v:sel.cluster},{l:"Total Volume",v:sel.totalVol},
+            {l:"First Observed",v:sel.first},{l:"Last Observed",v:sel.last},
+          ].map(item=>(
+            <div key={item.l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+              <span style={{fontSize:11,color:"var(--text-4)"}}>{item.l}</span>
+              <span style={{fontSize:12,color:"var(--text-2)",fontFamily:typeof item.v==="string"&&item.v.includes("Cluster")?"JetBrains Mono,monospace":"Inter,sans-serif"}}>{item.v}</span>
+            </div>
+          ))}
+          <button className="btn btn-primary" style={{width:"100%",justifyContent:"center",marginTop:16}}>Add to Investigation</button>
+        </div>
         )}
       </div>
     </div>

@@ -513,17 +513,32 @@ export function signalsToDisplayStrings(signals: RiskSignal[]): string[] {
 //
 // Replaces `4 + Math.floor(Math.random() * 6)` in routes/simulate.ts.
 // The delta is a deterministic function of the correlated entity's own
-// risk and confidence (both already-computed, stored fields) — a
-// higher-risk, higher-confidence correlated entity produces a larger
-// escalation, which is the explainable story the pipeline is telling.
+// risk/confidence AND the network's current risk — a higher-risk,
+// higher-confidence correlated entity pulls the network's score toward
+// its own level, which is the explainable story the pipeline is telling.
 // When no entity is available to correlate against, falls back to a
 // fixed, documented baseline instead of inventing a random one.
+//
+// IMPORTANT: this is a PULL toward the entity's risk, not a flat
+// increment. Earlier versions always returned a positive delta
+// (floor 3), so with the producer feeding events continuously and
+// forever (see /producer), every network's risk only ever went up and
+// every network eventually saturated at 100 regardless of how risky its
+// entities actually were. Scaling by the gap between the entity's risk
+// and the network's current risk means a network catches up quickly
+// while it's well below its entities' risk, then the delta shrinks
+// toward zero (and can go slightly negative) once it's caught up — so
+// each network settles near what its entity evidence actually supports
+// instead of climbing to 100 on every single event.
 
 const SIMULATE_DELTA_FALLBACK = 5; // midpoint of the old random 4-9 range, used only when no entity is available
-const SIMULATE_DELTA_MIN = 3;
+const SIMULATE_DELTA_MIN = -8;
 const SIMULATE_DELTA_MAX = 12;
 
-export function computeSimulateScoreDelta(entity: { risk: number; confidence: number } | null | undefined): {
+export function computeSimulateScoreDelta(
+  entity: { risk: number; confidence: number } | null | undefined,
+  currentNetworkRisk = 0
+): {
   delta: number;
   explanation: string;
 } {
@@ -533,13 +548,17 @@ export function computeSimulateScoreDelta(entity: { risk: number; confidence: nu
       explanation: "No correlated entity available; used fixed baseline escalation",
     };
   }
-  // Weighted average of the entity's risk and confidence, scaled down into
-  // a small per-event increment. Both inputs are already deterministic
-  // fields on the Entity row, so this is fully reproducible.
-  const raw = (entity.risk * 0.6 + entity.confidence * 0.4) / 10;
+  // Gap between where the network's risk sits now and where the
+  // correlated entity's own risk says it should be, pulled by a fraction
+  // that scales with how confident the correlation is (25%-50% of the
+  // gap per event). Both inputs are already deterministic fields on the
+  // Entity row, so this is fully reproducible.
+  const gap = entity.risk - currentNetworkRisk;
+  const pullFraction = 0.25 + (entity.confidence / 100) * 0.25;
+  const raw = gap * pullFraction;
   const delta = Math.max(SIMULATE_DELTA_MIN, Math.min(SIMULATE_DELTA_MAX, Math.round(raw)));
   return {
     delta,
-    explanation: `Derived from correlated entity risk (${entity.risk}) and confidence (${entity.confidence})`,
+    explanation: `Pulled toward correlated entity risk (${entity.risk}, confidence ${entity.confidence}) from current network risk (${currentNetworkRisk})`,
   };
 }

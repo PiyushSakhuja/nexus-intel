@@ -102,11 +102,37 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
       if (evt.type === "alert_generated") detail = evt.payload?.title ?? "New alert created";
       if (evt.type === "wallet_updated")  detail = `${evt.payload?.wallet ?? "Wallet"}: ${evt.payload?.direction === "OUTBOUND" ? "-" : "+"}${evt.payload?.amountBtcEq ?? "?"} BTC-eq (${evt.payload?.entity ?? "entity"})`;
 
+      // alert_generated payload is the freshly created Alert row itself
+      // (see intelligencePipeline.ts's emit("alert_generated", alert)), so
+      // its displayId is what AlertsScreen matches on to jump to/highlight
+      // this exact alert when the feed item is clicked below.
+      const alertId = evt.type === "alert_generated" ? (evt.payload?.displayId ?? null) : null;
+
+      // wallet_updated always carries a real Wallet.displayId — jump
+      // straight to that wallet in Blockchain Intelligence.
+      const walletId = evt.type === "wallet_updated" ? (evt.payload?.wallet ?? null) : null;
+
+      // correlation always carries the real correlated Entity's
+      // displayId (see intelligencePipeline.ts) — used to fetch the full
+      // entity record before navigating (EntityScreen needs the whole
+      // object, not just an id).
+      const entityDisplayId = evt.type === "correlation" ? (evt.payload?.entityDisplayId ?? null) : null;
+
+      // event_detected now carries a real Listing.displayId when this
+      // vendor has existing listing evidence to attribute it to (see
+      // intelligencePipeline.ts) — honestly null otherwise, in which
+      // case the feed item just isn't clickable.
+      const listingId = evt.type === "event_detected" ? (evt.payload?.listingId ?? null) : null;
+
       setFeedEvents(prev => [{
         id: `${evt.type}-${now.getTime()}`,
         type: evt.type,
         meta,
         detail,
+        alertId,
+        walletId,
+        entityDisplayId,
+        listingId,
         time: now.toLocaleTimeString(),
       }, ...prev].slice(0, 50)); // keep last 50
 
@@ -148,6 +174,27 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
   // start or stop the producer process itself — that runs independently
   // and keeps posting to the backend either way.
   const toggleLiveFeed = () => setLiveFeedOn(v => !v);
+
+  // ── Live feed click-through ─────────────────────────────────────────────
+  // Each feed item type carries a different kind of real target (see the
+  // payload fields captured in onEvent above): alerts and wallets carry an
+  // id the destination screen can select directly; a correlated entity
+  // only carries a displayId, and EntityScreen needs the FULL entity
+  // record (see navigate("entity", row) elsewhere in the app), so that
+  // one is fetched first.
+  const handleFeedClick = (evt: any) => {
+    if (evt.alertId) { navigate("alerts", { displayId: evt.alertId }); return; }
+    if (evt.walletId) { navigate("blockchain", { displayId: evt.walletId }); return; }
+    if (evt.listingId) { navigate("listings", { displayId: evt.listingId }); return; }
+    if (evt.entityDisplayId) {
+      apiGet<any>(`/api/entities/${encodeURIComponent(evt.entityDisplayId)}`)
+        .then(entity => navigate("entity", entity))
+        .catch(() => {}); // entity may since have been removed — just no-op rather than navigating with stale/partial data
+    }
+  };
+
+  const feedClickTarget = (evt: any): boolean =>
+    !!(evt.alertId || evt.walletId || evt.listingId || evt.entityDisplayId);
 
   return (
     <div style={{padding:"26px 28px"}} className="anim-fade-up">
@@ -343,6 +390,8 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
             {feedEvents.map((evt, i) => (
               <div
                 key={evt.id}
+                onClick={feedClickTarget(evt) ? () => handleFeedClick(evt) : undefined}
+                title={feedClickTarget(evt) ? "Jump to this record" : undefined}
                 style={{
                   display:"flex",gap:10,alignItems:"flex-start",
                   padding:"10px 12px",borderRadius:9,
@@ -354,6 +403,7 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
                     : "1px solid var(--border)",
                   transition:"all 0.3s",
                   animation: i === 0 ? "anim-alert 0.35s ease-out" : "none",
+                  cursor: feedClickTarget(evt) ? "pointer" : "default",
                 }}>
                 {/* Icon */}
                 <div style={{

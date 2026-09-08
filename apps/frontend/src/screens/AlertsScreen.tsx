@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { riskColor, riskColorLight, riskBg, riskBorder } from "../data";
 import { RiskBadge, PulseIndicator } from "../components/shared";
 import { getSocket } from "../lib/socket";
 import { apiGet, apiPatch } from "../lib/api";
 
-export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
+export function AlertsScreen({ navigate, highlightId }: { navigate:(s:string,d?:any)=>void; highlightId?: string | null }) {
   const [tab, setTab] = useState("All");
   const tabs = ["All","Critical","High","Medium","Resolved"];
   const [alertRows, setAlertRows] = useState<any[]>([]);
@@ -12,6 +12,7 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
   const [alertsError, setAlertsError] = useState<string|null>(null);
   const [updatingId, setUpdatingId] = useState<string|null>(null);
   const [sortBy, setSortBy] = useState<"newest"|"risk">("newest");
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const loadAlerts = () => {
     apiGet<any[]>("/api/alerts")
@@ -41,6 +42,18 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
   };
 
   useEffect(() => { loadAlerts(); }, []);
+
+  // Deep-link from elsewhere (e.g. Overview's Live Intelligence Feed):
+  // make sure the target alert isn't hidden by whatever tab filter was
+  // last selected, then scroll to and briefly highlight it once it's
+  // actually in the DOM.
+  useEffect(() => { if (highlightId) setTab("All"); }, [highlightId]);
+
+  useEffect(() => {
+    if (!highlightId) return;
+    const el = cardRefs.current[highlightId];
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightId, alertRows]);
 
   // Live pipeline events can create new alerts or change entity risk — never
   // fabricate/duplicate an alert locally, just re-pull the authoritative list.
@@ -109,10 +122,19 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
       </div>
 
       <div style={{display:"flex",flexDirection:"column",gap:11}}>
-        {filtered.map((a,i)=>(
-          <div key={a.id} className={`card anim-alert delay-${Math.min(i+1,5)}`} style={{padding:"18px 20px",transition:"border-color 0.13s,box-shadow 0.13s",cursor:"pointer"}}
+        {filtered.map((a,i)=>{
+          const isHighlighted = !!highlightId && (a.displayId === highlightId || a.id === highlightId);
+          return (
+          <div key={a.id}
+            ref={el => { cardRefs.current[a.displayId ?? a.id] = el; }}
+            className={`card anim-alert delay-${Math.min(i+1,5)}`}
+            style={{padding:"18px 20px",transition:"border-color 0.13s,box-shadow 0.13s",cursor:"pointer",
+              ...(isHighlighted ? {
+                borderColor: riskColor(a.severity),
+                boxShadow: `0 0 0 1px ${riskColor(a.severity)}, 0 4px 24px ${riskColor(a.severity)}30`,
+              } : {})}}
             onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.borderColor=`${riskColor(a.severity)}35`;(e.currentTarget as HTMLElement).style.boxShadow=`0 4px 20px ${riskColor(a.severity)}0a`;}}
-            onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.borderColor="var(--border)";(e.currentTarget as HTMLElement).style.boxShadow="none";}}>
+            onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.borderColor=isHighlighted?riskColor(a.severity):"var(--border)";(e.currentTarget as HTMLElement).style.boxShadow=isHighlighted?`0 0 0 1px ${riskColor(a.severity)}, 0 4px 24px ${riskColor(a.severity)}30`:"none";}}>
             <div style={{display:"flex",gap:16,alignItems:"flex-start"}}>
               {/* Severity icon */}
               <div style={{width:44,height:44,borderRadius:10,background:riskBg(a.severity),border:`1px solid ${riskBorder(a.severity)}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
@@ -125,6 +147,7 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
                   <span className="mono-sm" style={{color:"var(--text-4)"}}>{a.id}</span>
                   {a.status==="resolved"&&<span className="badge badge-low">RESOLVED</span>}
                   {a.network&&<span className="badge badge-accent">{a.network}</span>}
+                  {isHighlighted&&<span className="badge badge-accent" style={{background:`${riskColor(a.severity)}22`,color:riskColor(a.severity)}}>JUMPED HERE</span>}
                 </div>
                 <div style={{fontSize:14,fontWeight:600,color:"var(--text-1)",marginBottom:6}}>{a.title}</div>
                 <div style={{fontSize:12,color:"var(--text-3)",lineHeight:1.5,marginBottom:10}}>{a.reason}</div>
@@ -159,7 +182,8 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
               </div>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

@@ -2,17 +2,33 @@ import { useState, useEffect } from "react";
 import { riskColorLight } from "../data";
 import { RiskBadge } from "../components/shared";
 import { apiGet } from "../lib/api";
+import { getSocket } from "../lib/socket";
 
 export function EntitiesScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
   const [entities, setEntities] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string|null>(null);
 
-  useEffect(() => {
+  const loadEntities = () => {
     apiGet<any[]>("/api/entities")
       .then(data => { setEntities(data); setError(null); })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { loadEntities(); }, []);
+
+  // Live pipeline events can shift an entity's correlation/computed risk
+  // (new wallet evidence, a fresh correlation pass) — re-pull the
+  // authoritative list rather than letting this screen go stale until
+  // the next manual reload.
+  useEffect(() => {
+    const socket = getSocket();
+    const onEvent = (evt: any) => {
+      if (evt.type === "correlation" || evt.type === "risk_updated" || evt.type === "wallet_updated") loadEntities();
+    };
+    socket.on("intelligence-event", onEvent);
+    return () => { socket.off("intelligence-event", onEvent); };
   }, []);
 
   return (
