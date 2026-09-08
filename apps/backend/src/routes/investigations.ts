@@ -8,6 +8,7 @@ import {
   type SupportedModel,
 } from "../lib/llmClient.js";
 import { buildInvestigationDetailExtras } from "../lib/investigationDetail.js";
+import { addTimelineEvent } from "../lib/timelineEvents.js";
 import { logAudit, ipFromRequest } from "../lib/audit.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { computeVendorRisk, type VendorRisk } from "../lib/vendorRisk.js";
@@ -88,6 +89,15 @@ investigationsRouter.post("/", asyncHandler(async (req, res) => {
       status: safeStatus as any,
       assignee: assignee?.trim() || "Unassigned",
     },
+  });
+
+  await addTimelineEvent({
+    investigationId: inv.id,
+    type: "DETECTION",
+    label: "Investigation Created",
+    source: "Investigation System",
+    agent: inv.assignee,
+    description: `Investigation "${inv.title}" was created.`,
   });
 
   res.status(201).json(inv);
@@ -227,12 +237,38 @@ investigationsRouter.patch(
       data.description = description.trim();
     }
 
+    // Snapshot which fields are actually changing (vs. the pre-update
+    // `inv`) before the update runs, so the timeline entries below
+    // describe real transitions ("MEDIUM -> HIGH") rather than just "a
+    // field was patched".
+    const fieldChanges: { field: string; label: string; from: string; to: string }[] = [];
+    if (data.status !== undefined && data.status !== inv.status) {
+      fieldChanges.push({ field: "status", label: "Status", from: inv.status, to: data.status });
+    }
+    if (data.priority !== undefined && data.priority !== inv.priority) {
+      fieldChanges.push({ field: "priority", label: "Priority", from: inv.priority, to: data.priority });
+    }
+    if (data.assignee !== undefined && data.assignee !== inv.assignee) {
+      fieldChanges.push({ field: "assignee", label: "Assignee", from: inv.assignee, to: data.assignee });
+    }
+
     const updated = await prisma.investigation.update({
       where: {
         id: inv.id,
       },
       data,
     });
+
+    for (const change of fieldChanges) {
+      await addTimelineEvent({
+        investigationId: inv.id,
+        type: "ACTION",
+        label: `Investigation ${change.label} Changed`,
+        source: "Investigation Workspace",
+        agent: updated.assignee,
+        description: `${change.label} changed from "${change.from}" to "${change.to}".`,
+      });
+    }
 
     res.json(updated);
   })
@@ -285,6 +321,15 @@ investigationsRouter.post(
         include: {
           entity: true,
         },
+      });
+
+      await addTimelineEvent({
+        investigationId: inv.id,
+        type: "DISCOVERY",
+        label: "Entity Added",
+        source: "Entity Intelligence",
+        agent: "Investigator A",
+        description: `Entity ${entity.alias} (${entity.displayId}) was linked to this investigation.`,
       });
 
       res.status(201).json(link);
@@ -370,6 +415,22 @@ investigationsRouter.post(
       .filter((ev) => ev.investigationId !== inv.id)
       .map((ev) => ev.id);
 
+    // Records that already have an InvestigationEvidence row for this
+    // investigation — the upsert below is a no-op for these, so they
+    // shouldn't generate a duplicate "Evidence Attached" timeline event on
+    // a repeat/race attach call.
+    const alreadyLinked = await prisma.investigationEvidence.findMany({
+      where: {
+        investigationId: inv.id,
+        evidenceId: { in: idsToLink },
+      },
+      select: { evidenceId: true },
+    });
+    const alreadyLinkedIds = new Set(alreadyLinked.map((l) => l.evidenceId));
+    const newlyLinkedIds = new Set(
+      idsToLink.filter((id) => !alreadyLinkedIds.has(id))
+    );
+
     await prisma.$transaction(
       idsToLink.map((evidenceId) =>
         prisma.investigationEvidence.upsert({
@@ -396,6 +457,24 @@ investigationsRouter.post(
         type: "write",
         ip: ipFromRequest(req),
       });
+
+      if (newlyLinkedIds.has(ev.id)) {
+        await addTimelineEvent({
+          investigationId: inv.id,
+          type: "EVIDENCE",
+          label: "Evidence Attached",
+          // EvidenceRecord's exact "source of this evidence" column name
+          // isn't otherwise referenced in this route — fall back through
+          // whichever of source/type is populated, then a generic label,
+          // rather than assuming a specific field exists.
+          source:
+            (ev as any).source ||
+            (ev as any).type ||
+            "Evidence Repository",
+          agent: "Investigator A",
+          description: `Evidence ${ev.displayId} was attached to this investigation.`,
+        });
+      }
     }
 
     // `linked` intentionally returns the existing EvidenceRecords exactly
@@ -961,6 +1040,15 @@ investigationsRouter.post(
       ip: ipFromRequest(req),
     });
 
+    await addTimelineEvent({
+      investigationId: inv.id,
+      type: "WARNING",
+      label: "Risk Assessment Generated",
+      source: "Risk Engine / AI Assessment",
+      agent: "System",
+      description: `AI risk assessment generated a risk score of ${result.riskScore}.`,
+    });
+
     // Best-effort — mirrors simulate.ts's live-feed broadcast pattern.
     try {
       getIo().emit("intelligence-event", {
@@ -1244,6 +1332,17 @@ investigationsRouter.post(
       ip: ipFromRequest(req),
     });
 
+    await addTimelineEvent({
+      investigationId: inv.id,
+      type: "ACTION",
+      label: "Investigator Note Added",
+      source: "Investigation Workspace",
+      agent: note.createdBy,
+      // Deliberately does not include the note's content — only that a
+      // note was added, not what it said.
+      description: `${note.createdBy} added a note to this investigation.`,
+    });
+
     res.status(201).json(note);
   })
 );
@@ -1470,6 +1569,19 @@ investigationsRouter.post(
       resource: inv.displayId,
       type: "export",
       ip: ipFromRequest(req),
+    });
+
+    await addTimelineEvent({
+      investigationId: inv.id,
+      type: "ACTION",
+      label: "Investigation Report Generated",
+      source: "Reporting",
+      agent: generatedBy?.trim() || "System",
+      description: `Investigation report generated${
+        reportType
+          ? ` (${reportType}${classification ? `, ${classification}` : ""})`
+          : ""
+      }.`,
     });
 
     res.status(201).json({
