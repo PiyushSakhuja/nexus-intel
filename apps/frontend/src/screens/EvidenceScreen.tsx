@@ -332,6 +332,28 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
               />
             </div>
 
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: 10, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 5 }}>Attachments</label>
+              <div
+                style={{
+                  border: "1px dashed var(--border-2, rgba(255,255,255,0.15))",
+                  borderRadius: 8,
+                  padding: "14px 12px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  fontSize: 11.5,
+                  color: "var(--text-4)",
+                }}
+              >
+                <span>📎 Add photos or documents</span>
+              </div>
+              <div style={{ fontSize: 10, color: "var(--text-4)", marginTop: 5 }}>
+                File attachments coming soon — not yet wired up.
+              </div>
+            </div>
+
             {submitError && (
               <div style={{ fontSize: 11.5, color: "var(--critical-light)", marginBottom: 12, padding: "8px 10px", background: "rgba(220,38,38,0.08)", borderRadius: 6, border: "1px solid rgba(220,38,38,0.2)" }}>
                 {submitError}

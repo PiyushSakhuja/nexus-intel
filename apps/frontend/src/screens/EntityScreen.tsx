@@ -176,7 +176,7 @@ function AddToCaseModal({
 
 export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity; navigate:(s:string,d?:any)=>void }) {
   const [tab, setTab] = useState("Overview");
-  const tabs = ["Overview","Relationships","Activity"];
+  const tabs = ["Overview","Listings","Marketplace / Comm","Wallets","Evidence","Relationships","Activity"];
 
   // entityProp always carries real data now — passed in via navigate("entity", row)
   // from whichever screen linked here (EntitiesScreen, SearchScreen, GraphScreen).
@@ -436,7 +436,7 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
             <div style={{display:"flex",gap:10}}>
               <button className="btn btn-primary" style={{flex:1,justifyContent:"center"}} onClick={()=>navigate("graph", { focusEntityDisplayId: source.displayId })}>View Network Graph</button>
               <button className="btn btn-ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>navigate("network-risk", source.network?.displayId ?? undefined)}>Network Risk Analysis</button>
-              <button className="btn btn-ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>navigate("evidence")}>Evidence</button>
+              <button className="btn btn-ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>setTab("Evidence")}>Evidence</button>
             </div>
 
             {/* Activity summary */}
@@ -444,12 +444,16 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
               <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:14}}>Activity Summary</div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
                 {[
-                  {label:"Marketplaces",val: live ? (correlation?.marketplaces?.length ?? "—") : source.marketplaces,icon:"▤"},
-                  {label:"Wallets",val: live ? "—" : source.wallets,icon:"◇"},
-                  {label:"Listings",val: live ? (correlation?.correlatedListings ?? "—") : source.listings,icon:"▣"},
-                  {label:"Comm IDs",val: live ? "—" : source.comms,icon:"◉"},
+                  {label:"Marketplaces",val: live ? (correlation?.marketplaces?.length ?? 0) : source.marketplaces,tabTarget:"Marketplace / Comm",icon:"▤"},
+                  {label:"Wallets",val: live ? (live.wallets?.length ?? 0) : source.wallets,tabTarget:"Wallets",icon:"◇"},
+                  {label:"Listings",val: live ? (live.listings?.length ?? correlation?.correlatedListings ?? 0) : source.listings,tabTarget:"Listings",icon:"▣"},
+                  {label:"Comm IDs",val: live ? (live.commIdentifiers?.length ?? 0) : source.comms,tabTarget:"Marketplace / Comm",icon:"◉"},
                 ].map(item=>(
-                  <div key={item.label} style={{textAlign:"center",background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"12px 8px"}}>
+                  <div
+                    key={item.label}
+                    onClick={live ? ()=>setTab(item.tabTarget) : undefined}
+                    style={{textAlign:"center",background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"12px 8px",cursor:live?"pointer":"default"}}
+                  >
                     <div style={{fontSize:18,color:"var(--text-4)",marginBottom:4}}>{item.icon}</div>
                     <div className="display" style={{fontSize:22,fontWeight:700,color:"var(--text-1)"}}>{item.val}</div>
                     <div style={{fontSize:10,color:"var(--text-4)",marginTop:3}}>{item.label}</div>
@@ -458,6 +462,171 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {tab==="Listings" && (
+        <div className="card" style={{padding:20}}>
+          <div style={{fontSize:11,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:12}}>
+            Correlated Listings {live ? `(${(live.listings ?? []).length})` : ""}
+          </div>
+          {!live && !error && <p className="page-sub">Loading listings…</p>}
+          {live && (live.listings ?? []).length === 0 && (
+            <div style={{textAlign:"center",padding:"40px 0",color:"var(--text-4)"}}>
+              <div style={{fontSize:32,marginBottom:12,opacity:0.3}}>▣</div>
+              <div>No listings correlate to this entity's alias yet.</div>
+            </div>
+          )}
+          {live && (live.listings ?? []).length > 0 && (
+            <div style={{overflowX:"auto"}}>
+              <table className="data-table" style={{minWidth:900}}>
+                <thead><tr><th>Record ID</th><th>Marketplace</th><th>Title</th><th>Category</th><th>Risk</th><th>Price</th><th>First Seen</th><th>Last Seen</th><th>Status</th></tr></thead>
+                <tbody>
+                  {live.listings.map((l: any) => (
+                    <tr key={l.id}>
+                      <td><span className="mono" style={{color:"var(--accent-hi)",fontSize:12}}>{l.displayId ?? l.id}</span></td>
+                      <td>{l.marketplace ?? l.source?.name ?? "—"}</td>
+                      <td style={{maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={l.title ?? undefined}>{l.title ?? "—"}</td>
+                      <td><span className="badge badge-accent" style={{fontSize:9}}>{l.category}</span></td>
+                      <td>
+                        <div style={{display:"flex",alignItems:"center",gap:7}}>
+                          <span style={{fontWeight:700,color:riskColorLight(l.risk)}}>{l.risk}</span>
+                          <RiskBadge score={l.risk}/>
+                        </div>
+                      </td>
+                      <td>{l.priceUsd != null ? `$${Number(l.priceUsd).toFixed(2)}` : "—"}</td>
+                      <td>{l.firstSeen ? new Date(l.firstSeen).toLocaleDateString() : "—"}</td>
+                      <td>{l.lastSeen ? new Date(l.lastSeen).toLocaleDateString() : "—"}</td>
+                      <td>{l.status ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab==="Marketplace / Comm" && (
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+          <div className="card" style={{padding:20}}>
+            <div style={{fontSize:11,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:12}}>Marketplace Presence</div>
+            {!live && !error && <p className="page-sub">Loading…</p>}
+            {live && (!correlation?.marketplaces || correlation.marketplaces.length === 0) && (
+              <div style={{textAlign:"center",padding:"30px 0",color:"var(--text-4)"}}>
+                <div style={{fontSize:28,marginBottom:10,opacity:0.3}}>▤</div>
+                <div>No relevant marketplace activity for this entity.</div>
+              </div>
+            )}
+            {live && correlation?.marketplaces?.length > 0 && (
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {correlation.marketplaces.map((m: string) => (
+                  <div key={m} style={{background:"rgba(255,255,255,0.03)",borderRadius:7,padding:"9px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span style={{fontSize:12,color:"var(--text-2)"}}>{m}</span>
+                    <span style={{fontSize:10,color:"var(--text-4)"}}>{(live.listings ?? []).filter((l: any) => l.marketplace === m).length} listing(s)</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card" style={{padding:20}}>
+            <div style={{fontSize:11,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:12}}>Communication Identifiers</div>
+            {!live && !error && <p className="page-sub">Loading…</p>}
+            {live && (live.commIdentifiers ?? []).length === 0 && (
+              <div style={{textAlign:"center",padding:"30px 0",color:"var(--text-4)"}}>
+                <div style={{fontSize:28,marginBottom:10,opacity:0.3}}>◉</div>
+                <div>No communication identifiers linked to this entity.</div>
+              </div>
+            )}
+            {live && (live.commIdentifiers ?? []).length > 0 && (
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {live.commIdentifiers.map((id: any) => (
+                  <div key={id.id ?? `${id.type}-${id.value}`} style={{background:"rgba(255,255,255,0.03)",borderRadius:7,padding:"9px 12px"}}>
+                    <div style={{fontSize:10,color:"var(--text-4)",marginBottom:3}}>{id.type}</div>
+                    <div className="mono-sm" style={{color:"var(--text-2)"}}>{id.value}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab==="Wallets" && (
+        <div className="card" style={{padding:20}}>
+          <div style={{fontSize:11,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:12}}>
+            Associated Wallets {live ? `(${(live.wallets ?? []).length})` : ""}
+          </div>
+          {!live && !error && <p className="page-sub">Loading wallets…</p>}
+          {live && (live.wallets ?? []).length === 0 && (
+            <div style={{textAlign:"center",padding:"40px 0",color:"var(--text-4)"}}>
+              <div style={{fontSize:32,marginBottom:12,opacity:0.3}}>◇</div>
+              <div>No wallets linked to this entity yet.</div>
+            </div>
+          )}
+          {live && (live.wallets ?? []).length > 0 && (
+            <div style={{overflowX:"auto"}}>
+              <table className="data-table" style={{minWidth:760}}>
+                <thead><tr><th>Wallet ID</th><th>Risk</th><th>Transactions (this entity)</th><th>Cluster</th><th>Total Volume</th><th>Last Active</th></tr></thead>
+                <tbody>
+                  {live.wallets.map((w: any) => (
+                    <tr key={w.id}>
+                      <td><span className="mono" style={{color:"var(--cyan)",fontSize:12}}>{w.displayId ?? w.id}</span></td>
+                      <td>
+                        <div style={{display:"flex",alignItems:"center",gap:7}}>
+                          <span style={{fontWeight:700,color:riskColorLight(w.risk)}}>{w.risk}</span>
+                          <RiskBadge score={w.risk}/>
+                        </div>
+                      </td>
+                      <td>{w.transactionCountForEntity}</td>
+                      <td><span className="mono-sm" style={{color:"var(--accent-hi)"}}>{w.cluster ?? "—"}</span></td>
+                      <td><span className="mono-sm" style={{color:"var(--text-3)"}}>{w.totalVolume ?? "—"}</span></td>
+                      <td>{w.lastSeen ? new Date(w.lastSeen).toLocaleDateString() : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab==="Evidence" && (
+        <div className="card" style={{padding:20}}>
+          <div style={{fontSize:11,color:"var(--text-4)",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:12}}>
+            Evidence for {source.alias} {live ? `(${(live.evidence ?? []).length})` : ""}
+          </div>
+          {!live && !error && <p className="page-sub">Loading evidence…</p>}
+          {live && (live.evidence ?? []).length === 0 && (
+            <div style={{textAlign:"center",padding:"40px 0",color:"var(--text-4)"}}>
+              <div style={{fontSize:32,marginBottom:12,opacity:0.3}}>◫</div>
+              <div>No evidence recorded for this entity yet.</div>
+            </div>
+          )}
+          {live && (live.evidence ?? []).length > 0 && (
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {live.evidence.map((ev: any) => (
+                <div key={ev.id} style={{background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"12px 14px",border:"1px solid var(--border)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <span className="mono" style={{fontSize:12,color:"var(--accent-hi)"}}>{ev.displayId ?? ev.id}</span>
+                    <span style={{fontSize:10,padding:"2px 8px",borderRadius:4,background:"rgba(255,255,255,0.04)",color:"var(--text-3)",border:"1px solid var(--border)"}}>
+                      {ev.status ? ev.status.charAt(0) + ev.status.slice(1).toLowerCase() : "Pending"}
+                    </span>
+                  </div>
+                  <div style={{fontSize:12,color:"var(--text-2)",marginBottom:4}}>{ev.type}</div>
+                  <div style={{display:"flex",gap:14,fontSize:10.5,color:"var(--text-4)",flexWrap:"wrap"}}>
+                    <span>Source: <span style={{color:"var(--text-3)"}}>{ev.source?.name ?? "Unknown"}</span></span>
+                    <span>Case: <span style={{color:"var(--text-3)"}}>{ev.investigation?.displayId ?? "—"}</span></span>
+                    <span>By: <span style={{color:"var(--text-3)"}}>{ev.uploadedBy ?? "System"}</span></span>
+                    <span>{ev.createdAt ? new Date(ev.createdAt).toLocaleString() : ""}</span>
+                  </div>
+                  {ev.notes && <div style={{fontSize:11.5,color:"var(--text-3)",marginTop:8,whiteSpace:"pre-wrap"}}>{ev.notes}</div>}
+                  <div className="hash-block" style={{marginTop:8,fontSize:10}}>{ev.hash}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

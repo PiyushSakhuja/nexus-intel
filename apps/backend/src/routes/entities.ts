@@ -275,14 +275,102 @@ entitiesRouter.get("/:displayId", async (req, res) => {
     ip: ipFromRequest(req),
   });
 
-  void walletRiskById; // per-entity summary is already attached via computed.walletEvidence; full per-wallet breakdowns are served by /api/wallets
+  // ── Listings correlated to this entity ──────────────────────────────
+  // Reuses the SAME correlation group entityRisk/the Overview tab already
+  // rely on (normalized-alias match — see entityCorrelation.ts). No new
+  // correlation logic: correlationGroup.listingIds is exactly the set of
+  // real Listing rows already deemed to belong to this entity's alias.
+  const correlationGroup = getCorrelationForAlias(entity.alias, correlationResult);
+  const listings =
+    correlationGroup && correlationGroup.listingIds.length > 0
+      ? await prisma.listing.findMany({
+          where: { id: { in: correlationGroup.listingIds } },
+          include: { source: true },
+          orderBy: { lastSeen: "desc" },
+        })
+      : [];
 
-  res.json(
-    attachComputedRisk(
+  // ── Wallets associated with this entity ─────────────────────────────
+  // Real WalletTransaction.entityId FK — the same relationship
+  // buildEntityWalletEvidence() already aggregates for computed.walletEvidence,
+  // just resolved here to full Wallet rows for display, with risk pulled
+  // from the already-computed walletRiskById map (lib/walletRisk.ts) rather
+  // than recomputed.
+  const entityWalletTransactions = await prisma.walletTransaction.findMany({
+    where: { entityId: entity.id },
+    include: { wallet: true },
+    orderBy: { occurredAt: "desc" },
+  });
+
+  const walletTxnCountById = new Map<string, number>();
+  const walletById = new Map<string, (typeof entityWalletTransactions)[number]["wallet"]>();
+  for (const t of entityWalletTransactions) {
+    walletById.set(t.walletId, t.wallet);
+    walletTxnCountById.set(t.walletId, (walletTxnCountById.get(t.walletId) ?? 0) + 1);
+  }
+
+  const wallets = Array.from(walletById.values()).map((w) => {
+    const walletRisk = walletRiskById.get(w.id);
+    return {
+      ...w,
+      risk: walletRisk?.calculable ? walletRisk.score : w.risk,
+      computed: walletRisk
+        ? {
+            score: walletRisk.score,
+            calculable: walletRisk.calculable,
+            explanation: walletRisk.explanation,
+          }
+        : null,
+      transactionCountForEntity: walletTxnCountById.get(w.id) ?? 0,
+    };
+  });
+
+  // ── Evidence corresponding to this entity ───────────────────────────
+  // An EvidenceRecord has no direct entityId (see schema.prisma) — it's
+  // scoped to Investigations. So "evidence for this entity" is every
+  // EvidenceRecord that belongs to (owning investigationId) OR is
+  // attached to (InvestigationEvidence join) an Investigation this entity
+  // is actually linked to via the real InvestigationEntity join
+  // (entity.investigationLinks, already fetched above). No evidence is
+  // duplicated or created — this only reads existing rows.
+  const linkedInvestigationIds = entity.investigationLinks.map((l) => l.investigationId);
+  const evidence =
+    linkedInvestigationIds.length > 0
+      ? await prisma.evidenceRecord.findMany({
+          where: {
+            OR: [
+              { investigationId: { in: linkedInvestigationIds } },
+              { investigationLinks: { some: { investigationId: { in: linkedInvestigationIds } } } },
+            ],
+          },
+          include: {
+            source: true,
+            investigation: true,
+          },
+          orderBy: { createdAt: "desc" },
+        })
+      : [];
+
+  // ── Marketplace / Comm identifiers ───────────────────────────────────
+  // No dedicated Marketplace or Communication model exists in the schema
+  // (see lib/graphSync.ts) — marketplace presence is the same
+  // correlation.marketplaces list already computed from real Listing rows,
+  // and "Comm" identifiers are whatever real Identifier rows this entity
+  // has whose type actually denotes a communication channel. Nothing is
+  // invented: if no such identifiers exist, this is an empty array and the
+  // frontend shows an honest empty state rather than fabricating data.
+  const commIdentifiers = entity.identifiers.filter((id) => /comm|telegram|email|username|discord|jabber|xmpp/i.test(id.type));
+
+  res.json({
+    ...attachComputedRisk(
       entity,
       vendorRiskByAlias,
       correlationResult,
       walletEvidenceByEntityId
-    )
-  );
+    ),
+    listings,
+    wallets,
+    evidence,
+    commIdentifiers,
+  });
 });
