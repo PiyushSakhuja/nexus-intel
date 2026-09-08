@@ -16,6 +16,7 @@ import { reportsRouter } from "./routes/reports.js";
 import { simulateRouter } from "./routes/simulate.js";
 import { ingestRouter } from "./routes/ingest.js";
 import { vendorsRouter } from "./routes/vendors.js";
+import { scrapeRouter } from "./routes/scrape.js";
 
 import { dashboardRouter, analyticsRouter } from "./routes/dashboard.js";
 import { searchRouter } from "./routes/search.js";
@@ -61,6 +62,7 @@ app.use("/api/listings", listingsRouter);
 app.use("/api/vendors", vendorsRouter);
 app.use("/api/audit-log", auditRouter);
 app.use("/api/sources", sourcesRouter);
+app.use("/api/scrape", scrapeRouter);
 
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/analytics", analyticsRouter);

@@ -19,6 +19,7 @@ const NAV_PATH: Record<string, string> = {
   reports: "/reports",
   audit: "/audit",
   admin: "/admin",
+  scraper: "/scraper",
 };
 
 export const NAV = [
@@ -34,6 +35,7 @@ export const NAV = [
   {key:"analytics",  icon:"▩", label:"Analytics"},
   {key:"reports",    icon:"◫", label:"Reports"},
   {key:"audit",      icon:"◻", label:"Audit Logs"},
+  {key:"scraper",    icon:"🕷", label:"Web Scraper"},
 ];
 
 export function Sidebar({ current, navigate }: { current: string; navigate: (s: string) => void }) {
