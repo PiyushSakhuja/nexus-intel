@@ -10,11 +10,15 @@
     "format": "oxfmt"
   },
   "dependencies": {
+    "@sigma/node-border": "^3.0.0",
+    "@sigma/utils": "^3.0.0",
+    "graphology": "^0.26.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-is": "^19.2.8",
     "react-router-dom": "^6.28.0",
     "recharts": "^3.10.1",
+    "sigma": "^3.0.3",
     "socket.io-client": "^4.8.1"
   },
   "devDependencies": {
