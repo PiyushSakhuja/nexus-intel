@@ -39,9 +39,13 @@ export interface ImageMetadataResult {
 
 const EDITING_SOFTWARE_PATTERN = /(photoshop|gimp|paint\.net|lightroom|affinity photo|canva)/i;
 
-export async function analyzeImage(imageUrl: string): Promise<ImageMetadataResult> {
+// Shared EXIF-parsing core. `label` is stored in the result's `imageUrl`
+// field (kept as-is for backward compatibility with existing callers/shape)
+// — for buffer-sourced images there's no URL, so callers pass a descriptive
+// placeholder instead.
+async function parseExif(buffer: Buffer, label: string): Promise<ImageMetadataResult> {
   const base: ImageMetadataResult = {
-    imageUrl,
+    imageUrl: label,
     width: null,
     height: null,
     cameraMake: null,
@@ -54,28 +58,8 @@ export async function analyzeImage(imageUrl: string): Promise<ImageMetadataResul
     suspicionFlags: [],
   };
 
-  let buffer: ArrayBuffer;
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    const res = await fetch(imageUrl, { signal: controller.signal });
-    clearTimeout(timeout);
-    if (!res.ok) return { ...base, error: `Fetch failed: HTTP ${res.status}` };
-
-    const contentLength = Number(res.headers.get("content-length") ?? 0);
-    if (contentLength && contentLength > MAX_IMAGE_BYTES) {
-      return { ...base, error: `Image too large (${contentLength} bytes) — skipped` };
-    }
-    buffer = await res.arrayBuffer();
-    if (buffer.byteLength > MAX_IMAGE_BYTES) {
-      return { ...base, error: `Image too large (${buffer.byteLength} bytes) — skipped` };
-    }
-  } catch (err: any) {
-    return { ...base, error: `Fetch error: ${err.message ?? String(err)}` };
-  }
-
-  try {
-    const data = await exifr.parse(Buffer.from(buffer), {
+    const data = await exifr.parse(buffer, {
       pick: ["Make", "Model", "Software", "GPSLatitude", "GPSLongitude", "DateTimeOriginal", "ExifImageWidth", "ExifImageHeight"],
     });
 
@@ -97,7 +81,7 @@ export async function analyzeImage(imageUrl: string): Promise<ImageMetadataResul
     }
 
     return {
-      imageUrl,
+      imageUrl: label,
       width: data?.ExifImageWidth ?? null,
       height: data?.ExifImageHeight ?? null,
       cameraMake: data?.Make ?? null,
@@ -116,4 +100,41 @@ export async function analyzeImage(imageUrl: string): Promise<ImageMetadataResul
     // metadata to inspect.
     return { ...base, metadataStripped: true, suspicionFlags: ["metadata_stripped"], error: `EXIF parse error: ${err.message ?? String(err)}` };
   }
+}
+
+// URL-based entry point: downloads the image first, then parses EXIF.
+export async function analyzeImage(imageUrl: string): Promise<ImageMetadataResult> {
+  let buffer: ArrayBuffer;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const res = await fetch(imageUrl, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      return { imageUrl, width: null, height: null, cameraMake: null, cameraModel: null, software: null, gpsLat: null, gpsLon: null, capturedAt: null, metadataStripped: true, suspicionFlags: [], error: `Fetch failed: HTTP ${res.status}` };
+    }
+
+    const contentLength = Number(res.headers.get("content-length") ?? 0);
+    if (contentLength && contentLength > MAX_IMAGE_BYTES) {
+      return { imageUrl, width: null, height: null, cameraMake: null, cameraModel: null, software: null, gpsLat: null, gpsLon: null, capturedAt: null, metadataStripped: true, suspicionFlags: [], error: `Image too large (${contentLength} bytes) — skipped` };
+    }
+    buffer = await res.arrayBuffer();
+    if (buffer.byteLength > MAX_IMAGE_BYTES) {
+      return { imageUrl, width: null, height: null, cameraMake: null, cameraModel: null, software: null, gpsLat: null, gpsLon: null, capturedAt: null, metadataStripped: true, suspicionFlags: [], error: `Image too large (${buffer.byteLength} bytes) — skipped` };
+    }
+  } catch (err: any) {
+    return { imageUrl, width: null, height: null, cameraMake: null, cameraModel: null, software: null, gpsLat: null, gpsLon: null, capturedAt: null, metadataStripped: true, suspicionFlags: [], error: `Fetch error: ${err.message ?? String(err)}` };
+  }
+
+  return parseExif(Buffer.from(buffer), imageUrl);
+}
+
+// Buffer-based entry point: for evidence already decoded in-process (e.g.
+// a base64 upload), so EXIF is read off the exact same bytes that were
+// hashed for chain-of-custody — no extra network fetch involved.
+export async function extractImageMetadata(imageBuffer: Buffer): Promise<ImageMetadataResult> {
+  if (imageBuffer.byteLength > MAX_IMAGE_BYTES) {
+    return { imageUrl: "uploaded-image", width: null, height: null, cameraMake: null, cameraModel: null, software: null, gpsLat: null, gpsLon: null, capturedAt: null, metadataStripped: true, suspicionFlags: [], error: `Image too large (${imageBuffer.byteLength} bytes) — skipped` };
+  }
+  return parseExif(imageBuffer, "uploaded-image");
 }
