@@ -43,7 +43,7 @@ export function SearchScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
 
       <div style={{position:"relative",marginBottom:14}}>
         <span style={{position:"absolute",left:16,top:"50%",transform:"translateY(-50%)",fontSize:18,color:"var(--text-4)"}}>⌕</span>
-        <input className="input" style={{paddingLeft:46,paddingTop:13,paddingBottom:13,fontSize:14,borderRadius:10}}
+        <input className="input" style={{paddingLeft:46,paddingRight:16,paddingTop:13,paddingBottom:13,fontSize:14,borderRadius:10}}
           placeholder="Search alias, wallet, listing title, vendor, case ID, keyword…"
           value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==="Enter"&&search()}/>
         <button className="btn btn-primary" style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)"}} onClick={search} disabled={loading}>

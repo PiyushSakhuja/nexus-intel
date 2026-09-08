@@ -7,7 +7,6 @@ export function AuditScreen() {
   const [auditLoading, setAuditLoading] = useState(true);
   const [auditError, setAuditError] = useState<string|null>(null);
   const [activeFilter, setActiveFilter] = useState("All");
-  const [searchText, setSearchText] = useState("");
 
   useEffect(() => {
     apiGet<any[]>("/api/audit-log")
@@ -32,16 +31,9 @@ export function AuditScreen() {
   const filterChips = ["All","Read","Write","Export","Admin","System"];
 
   // Chip filters by log.type (e.g. "Read" chip -> type === "read"); "All"
-  // shows everything. Search box filters on top of that by user or action
-  // text, case-insensitive.
+  // shows everything.
   const filteredRows = auditRows.filter(log => {
-    const matchesChip = activeFilter === "All" || log.type === activeFilter.toLowerCase();
-    const q = searchText.trim().toLowerCase();
-    const matchesSearch = !q ||
-      (log.user ?? "").toLowerCase().includes(q) ||
-      (log.action ?? "").toLowerCase().includes(q) ||
-      (log.resource ?? "").toLowerCase().includes(q);
-    return matchesChip && matchesSearch;
+    return activeFilter === "All" || log.type === activeFilter.toLowerCase();
   });
 
   return (
@@ -50,16 +42,6 @@ export function AuditScreen() {
         <div>
           <h1 className="section-head">Audit Logs</h1>
           <p className="page-sub">Complete activity audit trail for compliance, accountability, and security review.</p>
-        </div>
-        <div style={{display:"flex",gap:8}}>
-          <input
-            className="input"
-            style={{width:220,padding:"7px 12px",fontSize:12}}
-            placeholder="Filter by user or action…"
-            value={searchText}
-            onChange={e=>setSearchText(e.target.value)}
-          />
-          <button className="btn btn-ghost btn-sm">Export CSV</button>
         </div>
       </div>
 

@@ -146,7 +146,6 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
           <p className="page-sub">Verified evidence with integrity tracking and chain-of-custody audit trail.</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-ghost btn-sm">Import</button>
           <button className="btn btn-primary btn-sm" onClick={openAddModal}>+ Add Evidence</button>
         </div>
       </div>

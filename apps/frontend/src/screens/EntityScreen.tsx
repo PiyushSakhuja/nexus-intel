@@ -5,7 +5,7 @@ import {
 } from "../data";
 import {
   RingScore, RiskBadge,
-  PulseIndicator, BarContrib, TimelineView, type TimelineEvent,
+  PulseIndicator, BarContrib,
 } from "../components/shared";
 import { apiGet } from "../lib/api";
 
@@ -24,7 +24,7 @@ const SIGNAL_COLORS = ["#dc2626", "#ea580c", "#d97706", "#6366f1", "#8b5cf6", "#
 
 export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity; navigate:(s:string,d?:any)=>void }) {
   const [tab, setTab] = useState("Overview");
-  const tabs = ["Overview","Relationships","Activity","Evidence","Timeline"];
+  const tabs = ["Overview","Relationships","Activity"];
 
   // entityProp always carries real data now — passed in via navigate("entity", row)
   // from whichever screen linked here (EntitiesScreen, SearchScreen, GraphScreen).
@@ -63,16 +63,18 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
 
   const dash = (v: number | string | null | undefined) => (v === null || v === undefined || v === "" ? "—" : v);
 
-  // Relationships tab: the entity detail endpoint doesn't include the graph
-  // node, so we find it ourselves (GraphNode.entityId === Entity.id), then
-  // ask the graph API to expand it into real edges. Fetched lazily, once,
-  // the first time the tab is opened.
+  // Relationships + Activity tabs: the entity detail endpoint doesn't
+  // include the graph node, so we find it ourselves (GraphNode.entityId ===
+  // Entity.id), then ask the graph API to expand it into real edges.
+  // Fetched lazily, once, the first time either tab is opened — Activity
+  // renders this same neighborhood as a compact single-entity graph rather
+  // than refetching it separately.
   const [graphNode, setGraphNode] = useState<any>(null);
   const [relLoading, setRelLoading] = useState(false);
   const [relError, setRelError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (tab !== "Relationships" || graphNode || relLoading) return;
+    if ((tab !== "Relationships" && tab !== "Activity") || graphNode || relLoading) return;
     setRelLoading(true);
     apiGet<any>("/api/graph")
       .then(({ nodes }) => {
@@ -84,41 +86,6 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
       .catch(err => setRelError(err.message))
       .finally(() => setRelLoading(false));
   }, [tab, source?.id]);
-
-  // Timeline tab: an entity doesn't have its own timeline — timeline events
-  // belong to an Investigation. If this entity is linked to one (via
-  // investigationLinks, included in the /api/entities/:id response), pull
-  // that investigation's real timeline; otherwise show an honest empty state.
-  const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
-  const [timelineLoading, setTimelineLoading] = useState(false);
-  const [timelineError, setTimelineError] = useState<string | null>(null);
-  const linkedInvestigationDisplayId: string | null =
-    live?.investigationLinks?.[0]?.investigation?.displayId ?? null;
-
-  useEffect(() => {
-    if (tab !== "Timeline" || !linkedInvestigationDisplayId) return;
-    setTimelineLoading(true);
-    apiGet<any>(`/api/investigations/${encodeURIComponent(linkedInvestigationDisplayId)}/timeline`)
-      .then(data => {
-        const TYPE_COLORS: Record<string, string> = {
-          DETECTION: "#6366f1", ALERT: "#ea580c", DISCOVERY: "#06b6d4",
-          ESCALATION: "#d97706", WARNING: "#dc2626", ACTION: "#8b5cf6", EVIDENCE: "#16a34a",
-        };
-        setTimelineEvents((data.timeline ?? []).map((ev: any) => ({
-          date: new Date(ev.occurredAt).toLocaleDateString(),
-          time: new Date(ev.occurredAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          label: ev.label ?? ev.type,
-          type: ev.type,
-          source: ev.source ?? "—",
-          agent: ev.agent ?? "System",
-          desc: ev.description ?? ev.label ?? "",
-          color: TYPE_COLORS[ev.type] ?? "#6366f1",
-        })));
-        setTimelineError(null);
-      })
-      .catch(err => setTimelineError(err.message))
-      .finally(() => setTimelineLoading(false));
-  }, [tab, linkedInvestigationDisplayId]);
 
   const typeColors: Record<string,string> = {ENTITY:"#6366f1",MARKET:"#8b5cf6",LISTING:"#d97706",WALLET:"#06b6d4",COMM:"#16a34a",TXN:"#ea580c"};
 
@@ -288,7 +255,7 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
 
             {/* Action buttons */}
             <div style={{display:"flex",gap:10}}>
-              <button className="btn btn-primary" style={{flex:1,justifyContent:"center"}} onClick={()=>navigate("graph")}>View Network Graph</button>
+              <button className="btn btn-primary" style={{flex:1,justifyContent:"center"}} onClick={()=>navigate("graph", { focusEntityDisplayId: source.displayId })}>View Network Graph</button>
               <button className="btn btn-ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>navigate("network-risk", source.network?.displayId ?? undefined)}>Network Risk Analysis</button>
               <button className="btn btn-ghost" style={{flex:1,justifyContent:"center"}} onClick={()=>navigate("evidence")}>Evidence</button>
             </div>
@@ -313,21 +280,6 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
             </div>
           </div>
         </div>
-      )}
-
-      {tab==="Timeline" && (
-        linkedInvestigationDisplayId ? (
-          <>
-            {timelineLoading && <p className="page-sub">Loading timeline…</p>}
-            {timelineError && <p className="page-sub" style={{color:"var(--high-light)"}}>Couldn't reach the API ({timelineError}).</p>}
-            {!timelineLoading && !timelineError && <TimelineView events={timelineEvents}/>}
-          </>
-        ) : (
-          <div style={{textAlign:"center",padding:"60px 0",color:"var(--text-4)"}}>
-            <div style={{fontSize:32,marginBottom:12,opacity:0.3}}>◷</div>
-            <div>This entity isn't linked to an investigation yet, so there's no case timeline to show.</div>
-          </div>
-        )
       )}
 
       {tab==="Relationships" && (
@@ -358,18 +310,109 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
                   <RiskBadge score={r.other.risk}/>
                 </div>
               ))}
-              <button className="btn btn-ghost" style={{marginTop:16}} onClick={()=>navigate("graph")}>Open in Network Graph</button>
+              <button className="btn btn-ghost" style={{marginTop:16}} onClick={()=>navigate("graph", { focusEntityDisplayId: source.displayId })}>Open in Network Graph</button>
             </>
           )}
         </div>
       )}
 
-      {(tab==="Activity"||tab==="Evidence") && (
-        <div style={{textAlign:"center",padding:"60px 0",color:"var(--text-4)"}}>
-          <div style={{fontSize:32,marginBottom:12,opacity:0.3}}>◫</div>
-          <div>Navigate to the dedicated <button onClick={()=>navigate(tab==="Evidence"?"evidence":"graph")} style={{background:"none",border:"none",color:"var(--accent-hi)",cursor:"pointer",fontSize:13,textDecoration:"underline"}}>{tab==="Evidence"?"Evidence Repository":"Network Graph"}</button> for this view.</div>
+      {tab==="Activity" && (
+        <div className="card" style={{padding:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)"}}>{source.alias}'s Graph</div>
+            <button className="btn btn-ghost btn-sm" onClick={()=>navigate("graph", { focusEntityDisplayId: source.displayId })}>Open Full Network Graph</button>
+          </div>
+
+          {relLoading && <p className="page-sub">Loading graph…</p>}
+
+          {relError && (
+            <div style={{textAlign:"center",padding:"40px 0",color:"var(--text-4)"}}>
+              <div style={{fontSize:32,marginBottom:12,opacity:0.3}}>◈</div>
+              <div style={{marginBottom:10}}>{relError}</div>
+              <button onClick={()=>navigate("graph")} style={{background:"none",border:"none",color:"var(--accent-hi)",cursor:"pointer",fontSize:13,textDecoration:"underline"}}>View full Network Graph instead</button>
+            </div>
+          )}
+
+          {!relLoading && !relError && graphNode && (
+            <>
+              <EntityMiniGraph
+                centerLabel={source.alias}
+                relationships={relationships}
+                onNodeClick={()=>navigate("graph", { focusEntityDisplayId: source.displayId })}
+              />
+              <div style={{fontSize:11,color:"var(--text-4)",textAlign:"center",marginTop:10}}>
+                {relationships.length>0
+                  ? `${relationships.length} direct connection${relationships.length===1?"":"s"} — click the graph to explore in full`
+                  : "No direct relationships recorded for this entity yet."}
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+// A compact, single-entity radial graph for the Activity tab — this
+// entity at the center with only its direct neighbors around it, built
+// from the same relationships list the Relationships tab already derives
+// from graphNode.edgesFrom/edgesTo. This intentionally does NOT reuse
+// GraphScreen's full force-directed layout: that component renders the
+// entire network (or a full-page focused slice of it) with its own
+// toolbar/legend chrome designed for a dedicated page, which doesn't fit
+// inside a tab panel. Clicking anywhere in it hands off to the real
+// Network Graph (via focusEntityDisplayId) for actual exploration.
+const MINI_GRAPH_TYPE_COLORS: Record<string,string> = {ENTITY:"#6366f1",MARKET:"#8b5cf6",LISTING:"#d97706",WALLET:"#06b6d4",COMM:"#16a34a",TXN:"#ea580c"};
+const MINI_GRAPH_MAX_NEIGHBORS = 8; // caps visible neighbors so labels don't overlap; the count below the graph always shows the real total
+
+function EntityMiniGraph({
+  centerLabel, relationships, onNodeClick,
+}: {
+  centerLabel: string;
+  relationships: { other: { label: string; type: string; risk?: number }; label: string; direction: string }[];
+  onNodeClick: () => void;
+}) {
+  const W = 400, H = 260;
+  const cx = W / 2, cy = H / 2;
+  const radius = 92;
+  const shown = relationships.slice(0, MINI_GRAPH_MAX_NEIGHBORS);
+  const overflow = relationships.length - shown.length;
+  const truncate = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      width="100%"
+      style={{maxHeight:280,cursor:"pointer",display:"block"}}
+      onClick={onNodeClick}
+      role="img"
+      aria-label={`Graph of ${centerLabel} and its direct connections`}
+    >
+      {shown.map((r, i) => {
+        const angle = (i / Math.max(shown.length, 1)) * 2 * Math.PI - Math.PI / 2;
+        const nx = cx + radius * Math.cos(angle);
+        const ny = cy + radius * Math.sin(angle);
+        const color = MINI_GRAPH_TYPE_COLORS[r.other.type] || "#888";
+        return (
+          <g key={i}>
+            <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="var(--border)" strokeWidth={1.4}/>
+            <circle cx={nx} cy={ny} r={9} fill={color} opacity={0.9}/>
+            <text x={nx} y={ny+22} textAnchor="middle" fontSize={9.5} fill="var(--text-3)">
+              {truncate(r.other.label, 14)}
+            </text>
+          </g>
+        );
+      })}
+      {overflow > 0 && (
+        <text x={W-10} y={H-10} textAnchor="end" fontSize={10} fill="var(--text-4)">
+          +{overflow} more
+        </text>
+      )}
+      {/* Center node */}
+      <circle cx={cx} cy={cy} r={16} fill={MINI_GRAPH_TYPE_COLORS.ENTITY} stroke="var(--panel)" strokeWidth={3}/>
+      <text x={cx} y={cy+32} textAnchor="middle" fontSize={11} fontWeight={700} fill="var(--text-1)">
+        {truncate(centerLabel, 20)}
+      </text>
+    </svg>
   );
 }

@@ -22,10 +22,6 @@ export function EntitiesScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
           <h1 className="section-head">Entities</h1>
           <p className="page-sub">All resolved intelligence entities with cross-source correlation.</p>
         </div>
-        <div style={{display:"flex",gap:8}}>
-          <input className="input" style={{width:220,padding:"7px 12px",fontSize:12}} placeholder="Filter entities…"/>
-          <button className="btn btn-ghost btn-sm">Export</button>
-        </div>
       </div>
       {loading && <p className="page-sub" style={{marginBottom:12}}>Loading entities…</p>}
       {error && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({error}).</p>}

@@ -15,6 +15,8 @@ export function ReportsScreen() {
   const [genError, setGenError] = useState<string|null>(null);
   const [reportData, setReportData] = useState<any|null>(null);
   const [generatedAt, setGeneratedAt] = useState<Date|null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string|null>(null);
 
   useEffect(() => {
     apiGet<any[]>("/api/investigations")
@@ -48,6 +50,30 @@ export function ReportsScreen() {
       setGenError(err.message ?? "Failed to generate report — could not reach the API.");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  // ── Export the currently-generated report as a PDF ──────────────────────
+  // Uses the browser's native print-to-PDF (no extra client-side PDF lib
+  // available in this project), then records a real "export" audit event —
+  // this is what makes it show up under Audit Logs, same pattern as the
+  // report-generated event fired above.
+  const exportPdf = async () => {
+    if (!reportData || !generated) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      window.print();
+      await apiPost(`/api/investigations/${selectedInvId}/report-exported`, {
+        exportedBy: "Investigator A",
+        format: "PDF",
+        reportType,
+        classification,
+      });
+    } catch (err: any) {
+      setExportError(err.message ?? "Failed to record the export — the PDF dialog may still have opened.");
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -262,6 +288,21 @@ export function ReportsScreen() {
 
         {/* Preview */}
         <div className="card" style={{padding:32}}>
+          <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:12}}>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={exportPdf}
+              disabled={!generated || !reportData || exporting}
+              title={!generated || !reportData ? "Generate a report first" : "Export as PDF"}
+            >
+              {exporting ? "Exporting…" : "Export PDF"}
+            </button>
+          </div>
+          {exportError && (
+            <div style={{fontSize:11.5,color:"var(--critical-light)",marginBottom:12,padding:"8px 10px",background:"rgba(220,38,38,0.08)",borderRadius:6,border:"1px solid rgba(220,38,38,0.2)"}}>
+              {exportError}
+            </div>
+          )}
           <div style={{textAlign:"center",marginBottom:28,paddingBottom:22,borderBottom:"2px solid rgba(99,102,241,0.3)"}}>
             <div style={{fontSize:9.5,color:"var(--text-4)",letterSpacing:"0.15em",textTransform:"uppercase",marginBottom:8}}>NEXUS INTELLIGENCE PLATFORM</div>
             <div className="display" style={{fontSize:22,fontWeight:800,color:"var(--text-1)",letterSpacing:"-0.02em",marginBottom:6}}>INTELLIGENCE ASSESSMENT REPORT</div>

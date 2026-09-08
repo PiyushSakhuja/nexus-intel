@@ -32,10 +32,6 @@ export function ListingsScreen() {
           <h1 className="section-head">Listings Intelligence</h1>
           <p className="page-sub">Flagged intelligence records from tracked marketplaces. No purchase functionality.</p>
         </div>
-        <div style={{display:"flex",gap:8}}>
-          <input className="input" style={{width:200,padding:"7px 12px",fontSize:12}} placeholder="Filter records…"/>
-          <button className="btn btn-ghost btn-sm">Export</button>
-        </div>
       </div>
       {loading && <p className="page-sub" style={{marginBottom:12}}>Loading listings…</p>}
       {error && <p className="page-sub" style={{marginBottom:12,color:"var(--high-light)"}}>Couldn't reach the API ({error}).</p>}

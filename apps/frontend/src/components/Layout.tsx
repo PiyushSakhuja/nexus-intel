@@ -74,14 +74,6 @@ export function Topbar({
         <div className="display grad-text" style={{fontSize:15,fontWeight:800,letterSpacing:"-0.02em"}}>NEXUS INTEL</div>
       </div>
 
-      {/* Search */}
-      <div style={{flex:1,maxWidth:420,marginLeft:8}}>
-        <div style={{display:"flex",alignItems:"center",gap:9,background:"rgba(255,255,255,0.04)",border:"1px solid var(--border-mid)",borderRadius:8,padding:"7px 13px"}}>
-          <span style={{color:"var(--text-4)",fontSize:14}}>⌕</span>
-          <input style={{background:"none",border:"none",outline:"none",color:"var(--text-2)",fontSize:12.5,flex:1,fontFamily:"Inter,sans-serif"}} placeholder="Global search — entity, wallet, case, alert…"/>
-        </div>
-      </div>
-
       <div style={{flex:1}}/>
 
       {/* Clock */}

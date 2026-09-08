@@ -11,6 +11,7 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
   const [alertsLoading, setAlertsLoading] = useState(true);
   const [alertsError, setAlertsError] = useState<string|null>(null);
   const [updatingId, setUpdatingId] = useState<string|null>(null);
+  const [sortBy, setSortBy] = useState<"newest"|"risk">("newest");
 
   const loadAlerts = () => {
     apiGet<any[]>("/api/alerts")
@@ -59,6 +60,11 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
     if(tab==="High") return a.severity>=60&&a.severity<80&&a.status!=="resolved";
     if(tab==="Medium") return a.severity>=40&&a.severity<60&&a.status!=="resolved";
     return true;
+  }).sort((a,b)=>{
+    if(sortBy==="risk") return b.severity-a.severity;
+    const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return bt-at;
   });
 
   const updateStatus = async (displayId: string, status: "REVIEWED" | "RESOLVED") => {
@@ -81,12 +87,10 @@ export function AlertsScreen({ navigate }: { navigate:(s:string,d?:any)=>void })
           <p className="page-sub">Monitor and triage intelligence alerts by severity and status.</p>
         </div>
         <div style={{display:"flex",gap:8}}>
-          <select className="input" style={{width:"auto",padding:"7px 12px",fontSize:12}}>
-            <option style={{background:"#0f1420"}}>Sort: Newest First</option>
-            <option style={{background:"#0f1420"}}>Sort: Risk High→Low</option>
+          <select className="input" style={{width:"auto",padding:"7px 12px",fontSize:12}} value={sortBy} onChange={e=>setSortBy(e.target.value as "newest"|"risk")}>
+            <option style={{background:"#0f1420"}} value="newest">Sort: Newest First</option>
+            <option style={{background:"#0f1420"}} value="risk">Sort: Risk High→Low</option>
           </select>
-          <button className="btn btn-ghost btn-sm">Export</button>
-          <button className="btn btn-ghost btn-sm">Mark All Read</button>
         </div>
       </div>
 

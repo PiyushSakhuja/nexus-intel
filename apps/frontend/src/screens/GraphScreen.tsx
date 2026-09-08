@@ -497,9 +497,15 @@ interface GraphScreenProps {
   // (GET /api/graph). See Phase 5/Phase 10 of the Person 2 brief — the
   // global graph's endpoint and fallback behavior are UNCHANGED.
   investigationId?: string | null;
+  // When set (e.g. navigating here from EntityScreen's "View Network
+  // Graph" button), the graph auto-selects the matching node once loaded
+  // instead of opening on the entire unfocused dataset — see the effect
+  // below. Matched against each node's `displayId` (attached by
+  // routes/graph.ts for entity-linked nodes).
+  focusEntityDisplayId?: string | null;
 }
 
-export function GraphScreen({ navigate, investigationId }: GraphScreenProps) {
+export function GraphScreen({ navigate, investigationId, focusEntityDisplayId }: GraphScreenProps) {
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
   const [riskOverlay, setRiskOverlay] = useState(true);
@@ -571,6 +577,17 @@ apiGet<any>("/api/graph")
     })
     .finally(() => setLoading(false));
 }, [investigationId]);
+
+// Auto-focus on the entity we navigated here for, once nodes have loaded.
+// Runs after the fetch effect above (which always resets `selected` to
+// null on investigationId change) so this correctly wins once real data
+// arrives. If no matching node is found, this simply does nothing and the
+// graph opens unfocused — same as before this prop existed.
+useEffect(() => {
+  if (!focusEntityDisplayId || liveNodes.length === 0) return;
+  const match = liveNodes.find((n: any) => n.displayId === focusEntityDisplayId);
+  if (match) setSelected(match.id);
+}, [liveNodes, focusEntityDisplayId]);
 
   // ─── Type filter, applied BEFORE layout ─────────────────────────────────
   // Previously the layout ran once on the full, unfiltered graph, and the
