@@ -1,11 +1,28 @@
 import { useState, useEffect } from "react";
 import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
+  AreaChart, Area, BarChart, Bar,
   PieChart, Pie, Cell, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 import { CustomTooltip } from "../components/shared";
 import { apiGet } from "../lib/api";
+
+// Draws a name label outside the slice with a short leader line back to it —
+// so a thin slice (e.g. a node type with a handful of records next to
+// hundreds of another type) still gets a readable label instead of relying
+// solely on the legend below the chart.
+function renderPieSliceLabel(props: any) {
+  const { cx, cy, midAngle, outerRadius, name } = props;
+  const RADIAN = Math.PI / 180;
+  const radius = outerRadius + 16;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+  return (
+    <text x={x} y={y} fill="var(--text-3)" fontSize={10} textAnchor={x > cx ? "start" : "end"} dominantBaseline="central">
+      {name}
+    </text>
+  );
+}
 
 export function AnalyticsScreen() {
   const [data, setData] = useState<any | null>(null);
@@ -28,8 +45,7 @@ export function AnalyticsScreen() {
 
   const {
     activityTimeline, alertsByDay, riskDistribution,
-    entityTypeDist, sourceContrib, networkRiskEvolution,
-    networkRiskEvolutionNetworkId,
+    entityTypeDist, sourceContrib,
   } = data;
 
   return (
@@ -95,7 +111,7 @@ export function AnalyticsScreen() {
               <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:8,justifyContent:"center"}}>
                 {riskDistribution.map((d:any)=>(
                   <div key={d.name} style={{display:"flex",alignItems:"center",gap:5,fontSize:10.5,color:"var(--text-3)"}}>
-                    <div style={{width:8,height:8,borderRadius:2,background:d.color}}/>{d.name} ({d.value})
+                    <div style={{width:8,height:8,borderRadius:2,background:d.color}}/>{d.name}
                   </div>
                 ))}
               </div>
@@ -108,14 +124,32 @@ export function AnalyticsScreen() {
           {entityTypeDist.length === 0 ? (
             <div style={{padding:"20px 0",textAlign:"center",color:"var(--text-4)",fontSize:12}}>No graph nodes recorded yet.</div>
           ) : (
-            <ResponsiveContainer width="100%" height={160}>
-              <PieChart>
-                <Pie data={entityTypeDist} dataKey="value" nameKey="type" innerRadius={40} outerRadius={65} paddingAngle={3}>
-                  {entityTypeDist.map((d:any,i:number)=><Cell key={i} fill={d.color}/>)}
-                </Pie>
-                <Tooltip content={<CustomTooltip/>}/>
-              </PieChart>
-            </ResponsiveContainer>
+            <>
+              <ResponsiveContainer width="100%" height={190}>
+                <PieChart>
+                  <Pie
+                    data={entityTypeDist}
+                    dataKey="value"
+                    nameKey="type"
+                    innerRadius={40}
+                    outerRadius={62}
+                    paddingAngle={3}
+                    label={renderPieSliceLabel}
+                    labelLine={{ stroke: "var(--border)" }}
+                  >
+                    {entityTypeDist.map((d:any,i:number)=><Cell key={i} fill={d.color}/>)}
+                  </Pie>
+                  <Tooltip content={<CustomTooltip/>}/>
+                </PieChart>
+              </ResponsiveContainer>
+              <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:8,justifyContent:"center"}}>
+                {entityTypeDist.map((d:any)=>(
+                  <div key={d.type} style={{display:"flex",alignItems:"center",gap:5,fontSize:10.5,color:"var(--text-3)"}}>
+                    <div style={{width:8,height:8,borderRadius:2,background:d.color}}/>{d.type}
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
 
@@ -136,27 +170,6 @@ export function AnalyticsScreen() {
         </div>
       </div>
 
-      <div className="card" style={{padding:20}}>
-        <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)",marginBottom:4}}>
-          Network Risk Trend {networkRiskEvolutionNetworkId ? `— ${networkRiskEvolutionNetworkId}` : ""}
-        </div>
-        <div style={{fontSize:11,color:"var(--text-3)",marginBottom:16}}>Highest-risk network's recorded risk history</div>
-        {networkRiskEvolution.length === 0 ? (
-          <div style={{padding:"30px 0",textAlign:"center",color:"var(--text-4)",fontSize:12}}>
-            No risk history yet — run a simulation from the Overview screen to generate trajectory points.
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={180}>
-            <LineChart data={networkRiskEvolution}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)"/>
-              <XAxis dataKey="day" tick={{fill:"var(--text-4)",fontSize:10}} axisLine={false} tickLine={false}/>
-              <YAxis tick={{fill:"var(--text-4)",fontSize:10}} axisLine={false} tickLine={false} domain={[0,100]}/>
-              <Tooltip content={<CustomTooltip/>}/>
-              <Line type="monotone" dataKey="score" stroke="var(--critical)" strokeWidth={2} dot={{r:3}} name="Risk Score"/>
-            </LineChart>
-          </ResponsiveContainer>
-        )}
-      </div>
     </div>
   );
 }
