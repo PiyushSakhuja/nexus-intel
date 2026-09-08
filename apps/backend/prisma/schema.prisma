@@ -279,26 +279,27 @@ enum EvidenceStatus {
 
 model EvidenceRecord {
   id              String         @id @default(cuid())
-  displayId       String         @unique // "EV-1029"
+  displayId       String         @unique
   type            String
-  notes           String?        // investigator-entered context/source description
-  hash            String         // SHA-256, actually computed
+  notes           String?
+  hash            String
   uploadedBy      String
   status          EvidenceStatus @default(PENDING)
   createdAt       DateTime       @default(now())
+  ocrText         String?        @db.Text
+  // EXIF/GPS/dimension metadata extracted from the uploaded image (see
+  // lib/imageMetadata.ts). Null for text-only evidence or images with
+  // no readable metadata. Stored as JSON rather than flattened columns
+  // since tag presence varies wildly per image (most have no EXIF at all).
+  imageMetadata   Json?
+  // Suspicion score + sentiment computed from `ocrText` (see
+  // lib/ocrSentiment.ts). Null until ocrText exists and analysis has run.
+  ocrSentiment    Json?
 
   sourceId        String?
   source          Source?        @relation(fields: [sourceId], references: [id])
-
-  // The investigation this record was originally created under (only ever
-  // set once, from the Evidence Repository's creation flow — see
-  // routes/misc.ts's POST /api/evidence). This is NOT the set of
-  // investigations the record is attached to; for that, see
-  // InvestigationEvidence below. Kept required/non-null so existing rows
-  // and the Repository's creation flow are untouched by this change.
   investigationId String
   investigation   Investigation  @relation(fields: [investigationId], references: [id], onDelete: Cascade)
-
   investigationLinks InvestigationEvidence[]
 }
 

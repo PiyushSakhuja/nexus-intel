@@ -36,7 +36,9 @@ const FRONTEND_URL =
 const app = express();
 
 app.use(cors({ origin: FRONTEND_URL }));
-app.use(express.json());
+// Default 100kb limit is too small for base64-encoded evidence images
+// (POST /api/evidence's imageBase64 field) — bump it.
+app.use(express.json({ limit: "15mb" }));
 
 app.get("/api/health", (_req, res) =>
   res.json({
