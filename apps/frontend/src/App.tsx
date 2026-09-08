@@ -31,6 +31,7 @@ import { AnalyticsScreen } from "./screens/AnalyticsScreen";
 import { ReportsScreen } from "./screens/ReportsScreen";
 import { AuditScreen } from "./screens/AuditScreen";
 import { AdminScreen } from "./screens/AdminScreen";
+import { ScraperScreen } from "./screens/ScraperScreen";
 
 // ─── ROOT APP ─────────────────────────────────────────────────────────────
 // Every screen now lives at its own real URL (react-router-dom), instead of
@@ -117,6 +118,7 @@ function buildPath(screen: string, data?: any): string {
       return id ? `/evidence/${enc(id)}` : "/evidence";
     }
     case "analytics": return "/analytics";
+    case "scraper": return "/scraper";
     case "reports": {
       const id = extractId(data);
       return id ? `/reports/${enc(id)}` : "/reports";
@@ -162,6 +164,7 @@ function screenKeyFromPath(pathname: string): string {
   if (pathname.startsWith("/timeline")) return "timeline";
   if (pathname.startsWith("/evidence")) return "evidence";
   if (pathname.startsWith("/analytics")) return "analytics";
+  if (pathname.startsWith("/scraper")) return "scraper";
   if (pathname.startsWith("/reports")) return "reports";
   if (pathname.startsWith("/audit")) return "audit";
   if (pathname.startsWith("/admin")) return "admin";
@@ -306,6 +309,7 @@ function AppRoutes() {
         <Route path="evidence" element={<EvidencePage />} />
         <Route path="evidence/:id" element={<EvidencePage />} />
         <Route path="analytics" element={<AnalyticsScreen />} />
+        <Route path="scraper" element={<ScraperScreen />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="reports/:id" element={<ReportsPage />} />
         <Route path="audit" element={<AuditScreen />} />
