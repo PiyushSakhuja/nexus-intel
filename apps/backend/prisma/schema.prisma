@@ -190,6 +190,7 @@ model Investigation {
 
   entities    InvestigationEntity[]
   evidence    EvidenceRecord[]
+  evidenceLinks InvestigationEvidence[]
   timeline    CaseTimelineEvent[]
   aiAssessments AiAssessment[]
   notes       InvestigationNote[]
@@ -289,8 +290,37 @@ model EvidenceRecord {
   sourceId        String?
   source          Source?        @relation(fields: [sourceId], references: [id])
 
+  // The investigation this record was originally created under (only ever
+  // set once, from the Evidence Repository's creation flow — see
+  // routes/misc.ts's POST /api/evidence). This is NOT the set of
+  // investigations the record is attached to; for that, see
+  // InvestigationEvidence below. Kept required/non-null so existing rows
+  // and the Repository's creation flow are untouched by this change.
   investigationId String
   investigation   Investigation  @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+
+  investigationLinks InvestigationEvidence[]
+}
+
+// Attaches an EXISTING EvidenceRecord to an (additional) Investigation,
+// without transferring ownership and without creating a new EvidenceRecord.
+// This is what Investigation Workspace > "+ Add Evidence" writes to
+// (POST /api/investigations/:displayId/evidence with { evidenceIds }) —
+// deliberately a separate join table rather than reusing
+// EvidenceRecord.investigationId, since that column is a single required
+// FK (one home investigation) and can't represent "the same record is also
+// attached to investigation B" without moving it out of investigation A or
+// duplicating the row (both of which the product spec explicitly rules
+// out). Removing an attachment (DELETE .../evidence/:evidenceId) deletes
+// only this row — never the underlying EvidenceRecord.
+model InvestigationEvidence {
+  investigationId String
+  evidenceId      String
+  investigation   Investigation  @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  evidence        EvidenceRecord @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  createdAt       DateTime       @default(now())
+
+  @@id([investigationId, evidenceId])
 }
 
 // ─── Wallets & Listings (blockchain + marketplace intelligence) ────────────

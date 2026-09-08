@@ -180,14 +180,29 @@ function attachComputedRisk(
   };
 }
 
-// GET /api/entities — list, matches the Entities screen table
-entitiesRouter.get("/", async (_req, res) => {
+// GET /api/entities — list, or search when ?search= is supplied.
+// The investigation workspace uses this endpoint for its live entity picker,
+// so search is performed against real persisted entity/identifier data rather
+// than the frontend demo array.
+entitiesRouter.get("/", async (req, res) => {
+  const search = String(req.query.search ?? "").trim();
+
   const [entities, vendorRiskByAlias, correlationResult, { walletEvidenceByEntityId }] = await Promise.all([
     prisma.entity.findMany({
+      where: search
+        ? {
+            OR: [
+              { alias: { contains: search, mode: "insensitive" } },
+              { displayId: { contains: search, mode: "insensitive" } },
+              { identifiers: { some: { value: { contains: search, mode: "insensitive" } } } },
+            ],
+          }
+        : undefined,
       include: {
         identifiers: true,
         network: true,
       },
+      take: search ? 25 : undefined,
     }),
 
     buildVendorRiskMap(),

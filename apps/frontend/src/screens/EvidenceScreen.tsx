@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { apiGet, apiPost, apiPatch } from "../lib/api";
+import { EVIDENCE_TYPES } from "../components/shared";
 
 export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
   const [evidenceRows, setEvidenceRows] = useState<any[]>([]);
@@ -290,8 +291,8 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
             <div style={{ marginBottom: 12 }}>
               <label style={{ display: "block", fontSize: 10, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 5 }}>Type</label>
               <select className="input" style={{ padding: "7px 10px", fontSize: 12 }} value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
-                {["Intelligence Record", "Wallet Transaction Log", "Communication Record", "Network Analysis Report", "Listing Capture"].map(t => (
-                  <option key={t} style={{ background: "#0f1420" }}>{t}</option>
+                {EVIDENCE_TYPES.map(t => (
+                  <option key={t.value} value={t.value} style={{ background: "#0f1420" }}>{t.value}</option>
                 ))}
               </select>
             </div>

@@ -66,7 +66,7 @@ simulateRouter.post("/event", asyncHandler(async (req, res) => {
   // 3. Correlate -> risk -> alert -> wallet. All in intelligencePipeline.ts.
   const result = await runIntelligencePipeline({
     network,
-    entity,
+    entity : null,
     triggerType: chosen.type,
     triggerDescription: chosen.description,
     ip: ipFromRequest(req),

@@ -7,7 +7,7 @@ import {
   RingScore, RiskBadge,
   PulseIndicator, BarContrib,
 } from "../components/shared";
-import { apiGet } from "../lib/api";
+import { apiGet, apiPost } from "../lib/api";
 
 // Readable labels for the backend's CorrelationSignal enum — presentation
 // only, doesn't change the underlying signal identifiers.
@@ -22,6 +22,158 @@ const SIGNAL_LABELS: Record<string, string> = {
 };
 const SIGNAL_COLORS = ["#dc2626", "#ea580c", "#d97706", "#6366f1", "#8b5cf6", "#06b6d4", "#16a34a"];
 
+// ─── Add to Case / Investigate modal ───────────────────────────────────────
+// Both "Add to Case" (attach + stay here) and "Investigate" (attach + jump
+// into that case's Workspace) go through this: pick an existing
+// investigation, or open a fresh one scoped to this entity right here —
+// either way the entity is really linked via
+// POST /api/investigations/:displayId/entities, never just a navigation
+// with no backing state.
+function AddToCaseModal({
+  entityId,
+  entityAlias,
+  onClose,
+  onLinked,
+}: {
+  entityId: string;
+  entityAlias: string;
+  onClose: () => void;
+  onLinked: (investigationDisplayId: string) => void;
+}) {
+  const [invOptions, setInvOptions] = useState<{ id: string; displayId: string; title: string }[]>([]);
+  const [loadingOptions, setLoadingOptions] = useState(true);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [mode, setMode] = useState<"existing" | "new">("existing");
+  const [selectedId, setSelectedId] = useState("");
+  const [newTitle, setNewTitle] = useState(`Investigation into ${entityAlias}`);
+  const [newDescription, setNewDescription] = useState(`Case opened from entity profile for ${entityAlias}.`);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiGet<any[]>("/api/investigations")
+      .then(data => {
+        const opts = data
+          .filter((i: any) => i.status !== "CLOSED")
+          .map((i: any) => ({ id: i.displayId ?? i.id, displayId: i.displayId ?? i.id, title: i.title }));
+        setInvOptions(opts);
+        if (opts.length > 0) setSelectedId(opts[0].id);
+        else setMode("new");
+        setOptionsError(null);
+      })
+      .catch(err => setOptionsError(err.message))
+      .finally(() => setLoadingOptions(false));
+  }, []);
+
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      let targetDisplayId = selectedId;
+
+      if (mode === "new") {
+        if (!newTitle.trim() || !newDescription.trim()) {
+          setError("Title and description are required to open a new investigation.");
+          setSubmitting(false);
+          return;
+        }
+        const created = await apiPost<any>("/api/investigations", {
+          title: newTitle.trim(),
+          description: newDescription.trim(),
+          priority: "MEDIUM",
+          status: "UNDER_INVESTIGATION",
+          assignee: "Investigator A",
+        });
+        targetDisplayId = created.displayId ?? created.id;
+      }
+
+      if (!targetDisplayId) {
+        setError("Select an investigation first.");
+        setSubmitting(false);
+        return;
+      }
+
+      await apiPost(`/api/investigations/${targetDisplayId}/entities`, { entityId });
+      onLinked(targetDisplayId);
+    } catch (err: any) {
+      setError(err.message ?? "Failed to link entity to investigation");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(7,9,16,0.8)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center" }}
+      onClick={e => { if (e.target === e.currentTarget && !submitting) onClose(); }}
+    >
+      <div style={{ background: "var(--card, #0f1420)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 14, padding: 26, width: 460, maxWidth: "calc(100vw - 32px)", boxShadow: "0 20px 60px rgba(0,0,0,0.6)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-1)" }}>Add {entityAlias} to a Case</div>
+          <button onClick={onClose} disabled={submitting} style={{ background: "none", border: "none", color: "var(--text-3)", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+          <button
+            className={`btn btn-sm ${mode === "existing" ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setMode("existing")}
+            disabled={invOptions.length === 0}
+          >
+            Existing Investigation
+          </button>
+          <button
+            className={`btn btn-sm ${mode === "new" ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setMode("new")}
+          >
+            New Investigation
+          </button>
+        </div>
+
+        {mode === "existing" ? (
+          <div style={{ marginBottom: 16 }}>
+            {loadingOptions && <div style={{ fontSize: 12, color: "var(--text-4)" }}>Loading investigations…</div>}
+            {optionsError && <div style={{ fontSize: 12, color: "var(--critical-light)" }}>Couldn't reach the API ({optionsError}).</div>}
+            {!loadingOptions && !optionsError && invOptions.length === 0 && (
+              <div style={{ fontSize: 12, color: "var(--text-4)" }}>No open investigations — start a new one instead.</div>
+            )}
+            {!loadingOptions && invOptions.length > 0 && (
+              <select className="input" style={{ padding: "7px 10px", fontSize: 12 }} value={selectedId} onChange={e => setSelectedId(e.target.value)}>
+                {invOptions.map(inv => (
+                  <option key={inv.id} value={inv.id} style={{ background: "#0f1420" }}>{inv.displayId} — {inv.title}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        ) : (
+          <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 10, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 5 }}>Title</label>
+              <input className="input" style={{ padding: "7px 10px", fontSize: 12 }} value={newTitle} onChange={e => setNewTitle(e.target.value)} />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 10, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 5 }}>Description</label>
+              <textarea className="input" style={{ minHeight: 70, resize: "vertical", fontSize: 12 }} value={newDescription} onChange={e => setNewDescription(e.target.value)} />
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div style={{ fontSize: 11.5, color: "var(--critical-light)", marginBottom: 14, padding: "8px 10px", background: "rgba(220,38,38,0.08)", borderRadius: 6, border: "1px solid rgba(220,38,38,0.2)" }}>
+            {error}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }} onClick={handleSubmit} disabled={submitting}>
+            {submitting ? "Linking…" : "Add to Case"}
+          </button>
+          <button className="btn btn-ghost" onClick={onClose} disabled={submitting}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity; navigate:(s:string,d?:any)=>void }) {
   const [tab, setTab] = useState("Overview");
   const tabs = ["Overview","Relationships","Activity"];
@@ -35,6 +187,12 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
   const [live, setLive] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // "Investigate" jumps into the case's Workspace after linking (real
+  // Entity.id required for the link — displayId alone isn't a valid FK
+  // value for POST /:displayId/entities). "Add to Case" links and stays.
+  const [caseModalMode, setCaseModalMode] = useState<"investigate" | "addToCase" | null>(null);
+  const [caseLinkNotice, setCaseLinkNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!displayId) { setLoading(false); return; }
@@ -122,14 +280,35 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
             </div>
           </div>
           <div style={{display:"flex",gap:8}}>
-            <button className="btn btn-primary" onClick={()=>navigate("workspace")}>Investigate</button>
-            <button className="btn btn-ghost">Add to Case</button>
-            <button className="btn btn-ghost" onClick={()=>navigate("reports")}>Generate Report</button>
+            <button className="btn btn-primary" onClick={()=>setCaseModalMode("investigate")} disabled={!live?.id}>Investigate</button>
+            <button className="btn btn-ghost" onClick={()=>setCaseModalMode("addToCase")} disabled={!live?.id}>Add to Case</button>
+            <button className="btn btn-ghost" onClick={()=>navigate("reports", linkedInvestigationDisplayId ?? undefined)}>Generate Report</button>
           </div>
         </div>
         {loading && <p className="page-sub" style={{marginTop:10}}>Loading live entity data…</p>}
         {error && <p className="page-sub" style={{marginTop:10,color:"var(--high-light)"}}>Couldn't reach the API ({error}) — risk and confidence are unavailable.</p>}
+        {caseLinkNotice && <p className="page-sub" style={{marginTop:10,color:"#4ade80"}}>{caseLinkNotice}</p>}
       </div>
+
+      {caseModalMode && live?.id && (
+        <AddToCaseModal
+          entityId={live.id}
+          entityAlias={source.alias}
+          onClose={() => setCaseModalMode(null)}
+          onLinked={(investigationDisplayId) => {
+            const investigate = caseModalMode === "investigate";
+            setCaseModalMode(null);
+            if (investigate) {
+              // Preserves entity + investigation context — jumps straight
+              // into that case's Workspace, never a generic/empty one.
+              navigate("workspace", investigationDisplayId);
+            } else {
+              setCaseLinkNotice(`Added to ${investigationDisplayId}.`);
+              setTimeout(() => setCaseLinkNotice(null), 4000);
+            }
+          }}
+        />
+      )}
 
       {/* Tabs */}
       <div className="tab-strip" style={{marginBottom:22}}>

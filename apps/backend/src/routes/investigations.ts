@@ -1,5 +1,4 @@
 import { Router } from "express";
-import crypto from "node:crypto";
 import { prisma } from "../lib/prisma.js";
 import { getIo } from "../sockets/io.js";
 import { generateInvestigationAssessment } from "../lib/investigationAssessment.js";
@@ -130,6 +129,12 @@ investigationsRouter.get(
           select: {
             entities: true,
             evidence: true,
+            // Evidence ATTACHED from elsewhere via the Workspace's "+ Add
+            // Evidence" picker (InvestigationEvidence), on top of `evidence`
+            // above (records whose home investigation is this one) — summed
+            // below so this list's evidence count matches what the
+            // Workspace's own evidence panel shows.
+            evidenceLinks: true,
           },
         },
       },
@@ -138,7 +143,15 @@ investigationsRouter.get(
       },
     });
 
-    res.json(investigations);
+    res.json(
+      investigations.map((inv) => ({
+        ...inv,
+        _count: {
+          ...inv._count,
+          evidence: inv._count.evidence + inv._count.evidenceLinks,
+        },
+      }))
+    );
   })
 );
 
@@ -287,20 +300,35 @@ investigationsRouter.post(
   })
 );
 
-// POST /api/investigations/:displayId/evidence — add an evidence record
+// POST /api/investigations/:displayId/evidence — attach one or more EXISTING
+// EvidenceRecords (from the Evidence Repository) to this investigation.
+//
+// This does NOT create a new EvidenceRecord. New evidence can only be
+// created from the Evidence Repository screen itself
+// (routes/misc.ts's POST /api/evidence) — that is deliberately the only
+// place `type`/`content`/hashing/etc. are handled. This route's only job is
+// to link already-existing rows via the InvestigationEvidence join table
+// (see schema.prisma), which is what lets the same EvidenceRecord be
+// attached to more than one investigation without moving it out of its
+// original/home investigation or duplicating it.
 investigationsRouter.post(
   "/:displayId/evidence",
   asyncHandler(async (req, res) => {
-    const { type, notes } = req.body as {
-      type?: string;
-      notes?: string;
+    const { evidenceIds } = req.body as {
+      evidenceIds?: unknown;
     };
 
-    if (!type?.trim()) {
+    if (
+      !Array.isArray(evidenceIds) ||
+      evidenceIds.length === 0 ||
+      !evidenceIds.every((id) => typeof id === "string" && id.trim())
+    ) {
       return res.status(400).json({
-        error: "type is required",
+        error: "evidenceIds is required and must be a non-empty array of evidence IDs",
       });
     }
+
+    const uniqueIds = Array.from(new Set(evidenceIds.map((id) => id.trim())));
 
     const inv = await prisma.investigation.findUnique({
       where: {
@@ -314,70 +342,76 @@ investigationsRouter.post(
       });
     }
 
-    // `displayId` is globally unique (see schema.prisma), so it must be
-    // derived from a global evidence count — not one scoped to this
-    // investigation. Two different investigations both starting their
-    // count at 0 would otherwise both try to create "EV-0001" and the
-    // second one would fail with a unique-constraint error (P2002).
-    // Retried a few times (mirroring the count-based generation
-    // routes/misc.ts's POST /api/evidence already uses) so two
-    // near-simultaneous requests recover instead of 500-ing.
-    const trimmedNotes = notes?.trim() || null;
-
-    // Real SHA-256 over whatever the investigator actually gave us (type +
-    // notes + a timestamp so two otherwise-identical quick-adds don't hash
-    // identically), matching the real hashing already done in
-    // routes/misc.ts's POST /api/evidence — this route previously faked it
-    // with Math.random(), which meant its "hash" carried zero integrity
-    // meaning despite the chain-of-custody UI implying otherwise.
-    const hash = crypto
-      .createHash("sha256")
-      .update(`${type.trim()}|${trimmedNotes ?? ""}|${Date.now()}`)
-      .digest("hex")
-      .toUpperCase();
-
-    const createEvidenceWithRetry = async (
-      attemptsLeft: number
-    ): Promise<Awaited<ReturnType<typeof prisma.evidenceRecord.create>>> => {
-      const count = await prisma.evidenceRecord.count();
-      const displayId = `EV-${String(count + 1).padStart(4, "0")}`;
-
-      try {
-        return await prisma.evidenceRecord.create({
-          data: {
-            displayId,
-            investigationId: inv.id,
-            type: type.trim(),
-            notes: trimmedNotes,
-            uploadedBy: "Investigator A",
-            status: "PENDING",
-            hash,
-          },
-        });
-      } catch (e: any) {
-        if (e.code === "P2002" && attemptsLeft > 1) {
-          // another request grabbed this displayId first — recount and retry
-          return createEvidenceWithRetry(attemptsLeft - 1);
-        }
-        throw e;
-      }
-    };
-
-    const evidence = await createEvidenceWithRetry(5);
-
-    await logAudit({
-      user: "Investigator A",
-      action: "Added Evidence",
-      resource: evidence.displayId,
-      type: "write",
-      ip: ipFromRequest(req),
+    const existing = await prisma.evidenceRecord.findMany({
+      where: {
+        id: { in: uniqueIds },
+      },
     });
 
-    res.status(201).json(evidence);
+    const foundIds = new Set(existing.map((e) => e.id));
+    const missingIds = uniqueIds.filter((id) => !foundIds.has(id));
+
+    if (missingIds.length > 0) {
+      return res.status(404).json({
+        error: "One or more evidence records were not found",
+        missingIds,
+      });
+    }
+
+    // Attach each one via the join table — except records whose home
+    // investigation (EvidenceRecord.investigationId) already IS this
+    // investigation, which are already implicitly part of it and don't
+    // need (or want) a redundant attachment row. Everything else upserts,
+    // so already-attached evidence is silently skipped rather than erroring
+    // the whole batch — the UI already disables/marks already-attached
+    // rows, so a race here (e.g. double-click) shouldn't surface as a
+    // failure.
+    const idsToLink = existing
+      .filter((ev) => ev.investigationId !== inv.id)
+      .map((ev) => ev.id);
+
+    await prisma.$transaction(
+      idsToLink.map((evidenceId) =>
+        prisma.investigationEvidence.upsert({
+          where: {
+            investigationId_evidenceId: {
+              investigationId: inv.id,
+              evidenceId,
+            },
+          },
+          update: {},
+          create: {
+            investigationId: inv.id,
+            evidenceId,
+          },
+        })
+      )
+    );
+
+    for (const ev of existing) {
+      await logAudit({
+        user: "Investigator A",
+        action: "Attached Evidence",
+        resource: ev.displayId,
+        type: "write",
+        ip: ipFromRequest(req),
+      });
+    }
+
+    // `linked` intentionally returns the existing EvidenceRecords exactly
+    // as stored — type/source/notes/hash/status/etc. are all untouched by
+    // this route, matching what the WorkspaceScreen already expects back
+    // from this endpoint.
+    res.status(201).json({ linked: existing });
   })
 );
 
-// DELETE /api/investigations/:displayId/evidence/:evidenceId
+// DELETE /api/investigations/:displayId/evidence/:evidenceId — remove this
+// investigation's ATTACHMENT to an evidence record (InvestigationEvidence
+// row only). The underlying EvidenceRecord is never deleted here — it
+// stays in the Evidence Repository (and in its home investigation, if this
+// investigation isn't that one) regardless of whether this call finds
+// something to remove.
 investigationsRouter.delete(
   "/:displayId/evidence/:evidenceId",
   asyncHandler(async (req, res) => {
@@ -393,6 +427,33 @@ investigationsRouter.delete(
       });
     }
 
+    const link = await prisma.investigationEvidence.findUnique({
+      where: {
+        investigationId_evidenceId: {
+          investigationId: inv.id,
+          evidenceId: req.params.evidenceId,
+        },
+      },
+    });
+
+    if (link) {
+      await prisma.investigationEvidence.delete({
+        where: {
+          investigationId_evidenceId: {
+            investigationId: inv.id,
+            evidenceId: req.params.evidenceId,
+          },
+        },
+      });
+      return res.status(204).send();
+    }
+
+    // Fallback for evidence that is HOME-owned by this investigation (i.e.
+    // was created directly under it via the Evidence Repository, rather
+    // than attached from elsewhere) and has no separate attachment row.
+    // Removing it from this investigation's evidence list in that case has
+    // always meant deleting the record outright (its only home), which is
+    // unchanged pre-existing behavior for that case.
     const ev = await prisma.evidenceRecord.findUnique({
       where: {
         id: req.params.evidenceId,
@@ -664,6 +725,18 @@ investigationsRouter.get(
           },
         },
         evidence: true,
+        // Existing EvidenceRecords ATTACHED from elsewhere (Investigation
+        // Workspace's "+ Add Evidence" / Attach Existing Evidence picker),
+        // as opposed to `evidence` above (records whose home investigation
+        // IS this one). Merged with `evidence` below so the Workspace's
+        // evidence list — and a page refresh of it — shows both, and so an
+        // already-home-owned or already-attached record can't be attached
+        // twice.
+        evidenceLinks: {
+          include: {
+            evidence: true,
+          },
+        },
         timeline: {
           orderBy: {
             occurredAt: "asc",
@@ -690,6 +763,20 @@ investigationsRouter.get(
     });
   if (!inv) return res.status(404).json({ error: "Investigation not found" });
 
+  // Merge home-owned evidence with attached-existing evidence, deduping by
+  // id (a record could in principle be both, e.g. attached back to its own
+  // home investigation — upsert in the POST route already no-ops that, but
+  // dedupe here too for safety), newest first.
+  const evidenceById = new Map(inv.evidence.map((e) => [e.id, e]));
+  for (const link of inv.evidenceLinks) {
+    if (!evidenceById.has(link.evidence.id)) {
+      evidenceById.set(link.evidence.id, link.evidence);
+    }
+  }
+  const mergedEvidence = Array.from(evidenceById.values()).sort(
+    (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+  );
+
   const linkedEntities = inv.entities.map((ie) => ie.entity);
   const network = inv.networkId
   ? await prisma.network.findUnique({
@@ -711,16 +798,19 @@ investigationsRouter.get(
     investigation: inv,
     network,
     linkedEntities,
-    evidence: inv.evidence.map((e) => ({ status: e.status })),
+    evidence: mergedEvidence.map((e) => ({ status: e.status })),
     timeline: inv.timeline.map((t) => ({ type: t.type })),
   });
 
 const entityRiskContributors =
   await computeEntityRiskContributors(inv.entities);
 
+const { evidenceLinks: _evidenceLinks, ...invWithoutLinks } = inv;
+
 res.json({
-  ...inv,
+  ...invWithoutLinks,
   entities: extras.entities,
+  evidence: mergedEvidence,
   wallets: extras.wallets,
   listings: extras.listings,
   risk: extras.risk,

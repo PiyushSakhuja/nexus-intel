@@ -34,6 +34,8 @@ export default function App() {
   const [workspaceDisplayId, setWorkspaceDisplayId] = useState<string | null>(null);
   const [networkDisplayId, setNetworkDisplayId] = useState<string | null>(null);
   const [graphInvestigationId, setGraphInvestigationId] = useState<string | null>(null);
+  const [timelineDisplayId, setTimelineDisplayId] = useState<string | null>(null);
+  const [reportsDisplayId, setReportsDisplayId] = useState<string | null>(null);
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
   const [autoOpenNewInvestigation, setAutoOpenNewInvestigation] = useState(false);
   const navigate = useCallback((s: string, data?: any) => {
@@ -50,6 +52,33 @@ export default function App() {
       if (displayId) {
         setWorkspaceDisplayId(displayId);
       }
+    }
+
+    if (s === "timeline") {
+      // Timeline must always operate on the investigation the user came
+      // from — never fall back to "the first investigation" or stale
+      // state from a previous case. No `data` (or no displayId within it)
+      // means "no case context", and TimelineScreen resolves that itself
+      // with an honest empty/first-available state rather than this
+      // silently reusing whatever was viewed last.
+      const timelineId = data
+        ? typeof data === "string"
+          ? data
+          : data.displayId ?? data.id ?? null
+        : null;
+      setTimelineDisplayId(timelineId);
+    }
+
+    if (s === "reports") {
+      // Same principle as timeline: which investigation's report to
+      // preselect must come from where the user navigated from, not be
+      // left to ReportsScreen to guess.
+      const reportsId = data
+        ? typeof data === "string"
+          ? data
+          : data.displayId ?? data.id ?? null
+        : null;
+      setReportsDisplayId(reportsId);
     }
 
     if (s === "evidence" && data?.selectedId) {
@@ -119,10 +148,10 @@ export default function App() {
             displayId={workspaceDisplayId}
           />
         );
-      case "timeline": return <TimelineScreen navigate={navigate} />;
+      case "timeline": return <TimelineScreen navigate={navigate} displayId={timelineDisplayId} />;
       case "evidence": return <EvidenceScreen selectedId={selectedEvidenceId} />;
       case "analytics": return <AnalyticsScreen />;
-      case "reports": return <ReportsScreen />;
+      case "reports": return <ReportsScreen navigate={navigate} preselectedDisplayId={reportsDisplayId} />;
       case "audit": return <AuditScreen />;
       case "admin": return <AdminScreen />;
       default: return <OverviewScreen navigate={navigate} />;

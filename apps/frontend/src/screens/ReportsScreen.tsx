@@ -1,12 +1,21 @@
 import { useState, useEffect } from "react";
 import { apiGet, apiPost } from "../lib/api";
 
-export function ReportsScreen() {
+export function ReportsScreen({
+  navigate,
+  preselectedDisplayId,
+}: {
+  navigate?: (s: string, d?: any) => void;
+  preselectedDisplayId?: string | null;
+}) {
   const sections = ["Executive Summary","Risk Assessment","Entity Analysis","Network Analysis","Evidence Summary","Investigation Timeline","AI Explanation","Audit Information"];
   const [checked, setChecked] = useState<Record<string,boolean>>(Object.fromEntries(sections.map(s=>[s,true])));
 
   const [invOptions, setInvOptions] = useState<{ id: string; displayId: string; title: string }[]>([]);
-  const [selectedInvId, setSelectedInvId] = useState("");
+  // Preselect whichever investigation the user came from (e.g. clicking
+  // "Generate Report" from a specific case's Workspace) instead of always
+  // defaulting to the first investigation in the list.
+  const [selectedInvId, setSelectedInvId] = useState(preselectedDisplayId ?? "");
   const [reportType, setReportType] = useState("Intelligence Assessment");
   const [classification, setClassification] = useState("RESTRICTED");
 
@@ -23,10 +32,19 @@ export function ReportsScreen() {
       .then(data => {
         const opts = data.map((i: any) => ({ id: i.displayId ?? i.id, displayId: i.displayId ?? i.id, title: i.title }));
         setInvOptions(opts);
-        if (opts.length > 0) setSelectedInvId(opts[0].id);
+        // Only default to the first investigation when nothing specific
+        // was passed in — a case opened via "Generate Report" from its
+        // Workspace must keep pointing at THAT case, not silently switch
+        // to whatever happens to sort first.
+        if (preselectedDisplayId && opts.some(o => o.id === preselectedDisplayId)) {
+          setSelectedInvId(preselectedDisplayId);
+        } else if (opts.length > 0 && !opts.some(o => o.id === selectedInvId)) {
+          setSelectedInvId(opts[0].id);
+        }
       })
       .catch(() => {});
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preselectedDisplayId]);
 
   const generateReport = async () => {
     if (!selectedInvId) { setGenError("Select an investigation first."); return; }
@@ -228,6 +246,13 @@ export function ReportsScreen() {
 
   return (
     <div style={{padding:"26px 28px"}}>
+      {navigate && preselectedDisplayId && (
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+          <button onClick={()=>navigate("workspace", preselectedDisplayId)} style={{background:"none",border:"none",color:"var(--text-3)",cursor:"pointer",fontSize:12,padding:0}}>← Case Workspace</button>
+          <span style={{color:"var(--text-4)"}}>/</span>
+          <span className="mono-sm" style={{color:"var(--accent-hi)"}}>{preselectedDisplayId}</span>
+        </div>
+      )}
       <div style={{marginBottom:22}}>
         <h1 className="section-head">Generate Intelligence Report</h1>
         <p className="page-sub">Compile and export a structured, auditable intelligence assessment.</p>

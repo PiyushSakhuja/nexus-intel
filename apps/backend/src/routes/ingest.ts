@@ -77,7 +77,7 @@ ingestRouter.post("/event", asyncHandler(async (req, res) => {
 
   const result = await runIntelligencePipeline({
     network,
-    entity,
+    entity: null,
     triggerType: chosen.type,
     triggerDescription: chosen.description,
     ip: ipFromRequest(req),

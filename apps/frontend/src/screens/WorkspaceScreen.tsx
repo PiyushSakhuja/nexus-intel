@@ -363,38 +363,75 @@ export function WorkspaceScreen({
   const [showAssign, setShowAssign] = useState(false);
   const [showCloseCase, setShowCloseCase] = useState(false);
 
-  // Add Evidence form state
-  const [evidenceType, setEvidenceType] = useState("Transaction Record");
-  const [evidenceSource, setEvidenceSource] = useState("");
+  // ─── Attach Existing Evidence (NOT a creation form) ──────────────────────
+  // This picker only searches and selects records that already exist in
+  // the Evidence Repository (GET /api/evidence?search=) and links them to
+  // this investigation (POST /api/investigations/:displayId/evidence with
+  // { evidenceIds }). It never creates a new EvidenceRecord — new evidence
+  // can only be created from the Evidence Repository screen itself.
+  const [evidenceSearch, setEvidenceSearch] = useState("");
+  const [evidenceResults, setEvidenceResults] = useState<any[]>([]);
+  const [evidenceSearching, setEvidenceSearching] = useState(false);
+  const [selectedEvidenceIds, setSelectedEvidenceIds] = useState<Set<string>>(new Set());
   const [addingEvidence, setAddingEvidence] = useState(false);
   const [addEvidenceError, setAddEvidenceError] = useState<string | null>(null);
   const [addEvidenceSuccess, setAddEvidenceSuccess] = useState(false);
+  const evidenceSearchSeq = { current: 0 } as { current: number };
+
+  const searchEvidence = async (q: string) => {
+    setEvidenceSearching(true);
+    const seq = ++evidenceSearchSeq.current;
+    try {
+      const data = await apiGet<any[]>(`/api/evidence${q.trim() ? `?search=${encodeURIComponent(q)}` : ""}`);
+      if (seq === evidenceSearchSeq.current) setEvidenceResults(data.slice(0, 30));
+    } catch {
+      if (seq === evidenceSearchSeq.current) setEvidenceResults([]);
+    } finally {
+      if (seq === evidenceSearchSeq.current) setEvidenceSearching(false);
+    }
+  };
+
+  const toggleSelectEvidence = (id: string) => {
+    setSelectedEvidenceIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const alreadyAttachedIds = new Set((inv?.evidenceItems ?? []).map((e: any) => e._rawId));
 
   const submitAddEvidence = async () => {
-    if (!inv?.id) return;
+    if (!inv?.id || selectedEvidenceIds.size === 0) return;
     setAddingEvidence(true);
     setAddEvidenceError(null);
     setAddEvidenceSuccess(false);
     try {
-      const created = await apiPost(`/api/investigations/${inv.id}/evidence`, { type: evidenceType, notes: evidenceSource.trim() });
+      const result = await apiPost<any>(`/api/investigations/${inv.id}/evidence`, {
+        evidenceIds: Array.from(selectedEvidenceIds),
+      });
+      const linked = result?.linked ?? [];
       setAddEvidenceSuccess(true);
-      setEvidenceSource("");
       setInv((prev: any) => prev ? {
         ...prev,
-        addedEvidence: [...(prev.addedEvidence ?? []), created],
-        evidenceItems: [...(prev.evidenceItems ?? []), {
-          _rawId: created.id,
-          id: created.displayId ?? created.id,
-          type: created.type,
-          hash: created.hash,
-          status: created.status,
-          uploadedBy: created.uploadedBy,
-          createdAt: created.createdAt,
-        }],
+        addedEvidence: [...(prev.addedEvidence ?? []), ...linked],
+        evidenceItems: [
+          ...(prev.evidenceItems ?? []),
+          ...linked.map((created: any) => ({
+            _rawId: created.id,
+            id: created.displayId ?? created.id,
+            type: created.type,
+            hash: created.hash,
+            status: created.status,
+            uploadedBy: created.uploadedBy,
+            createdAt: created.createdAt,
+          })),
+        ],
       } : prev);
-      setTimeout(() => { setShowAddEvidence(false); setAddEvidenceSuccess(false); }, 900);
+      setSelectedEvidenceIds(new Set());
+      setTimeout(() => { setShowAddEvidence(false); setAddEvidenceSuccess(false); setEvidenceSearch(""); setEvidenceResults([]); }, 900);
     } catch (err: any) {
-      setAddEvidenceError(err.message ?? "Failed to add evidence");
+      setAddEvidenceError(err.message ?? "Failed to attach evidence");
     } finally {
       setAddingEvidence(false);
     }
@@ -718,7 +755,7 @@ export function WorkspaceScreen({
         <div style={{ display: "flex", gap: 7, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <button className="btn btn-ghost btn-sm" onClick={focusAddNote}>Add Note</button>
           <button className="btn btn-ghost btn-sm" onClick={() => { setAssigneeName(inv.assignee ?? ""); setShowAssign(true); }}>Assign</button>
-          <button className="btn btn-primary btn-sm" onClick={() => navigate("reports")}>Generate Report</button>
+          <button className="btn btn-primary btn-sm" onClick={() => navigate("reports", inv.id)}>Generate Report</button>
           <button className="btn btn-danger btn-sm" onClick={() => setShowCloseCase(true)} disabled={inv.status === "CLOSED"}>
             {inv.status === "CLOSED" ? "Closed" : "Close Case"}
           </button>
@@ -867,7 +904,14 @@ export function WorkspaceScreen({
                 <div style={{ position: "relative" }}>
                   <button
                     className="btn btn-ghost btn-sm"
-                    onClick={() => { setShowAddEvidence(o => !o); setShowAddEntity(false); }}
+                    onClick={() => {
+                      setShowAddEvidence(o => {
+                        const next = !o;
+                        if (next) searchEvidence(evidenceSearch);
+                        return next;
+                      });
+                      setShowAddEntity(false);
+                    }}
                     style={{ display: "flex", alignItems: "center", gap: 5 }}
                   >
                     + Add Evidence
@@ -877,68 +921,81 @@ export function WorkspaceScreen({
                   {showAddEvidence && (
                     <div style={{
                       position: "absolute", top: "calc(100% + 6px)", right: 0,
-                      width: 380, background: "var(--elevated, #141a27)",
+                      width: 400, background: "var(--elevated, #141a27)",
                       border: "1px solid rgba(255,255,255,0.1)", borderRadius: 11,
                       boxShadow: "0 12px 40px rgba(0,0,0,0.6)", zIndex: 100,
                       overflow: "hidden",
                     }}>
-                      <div style={{ padding: "14px 14px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-1)", marginBottom: 12 }}>Add Evidence</div>
+                      {/* Header — this attaches EXISTING evidence only. New evidence
+                          records can only be created from the Evidence Repository
+                          screen (navigate("evidence")). */}
+                      <div style={{ padding: "12px 14px 10px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-1)", marginBottom: 2 }}>Attach Existing Evidence</div>
+                        <div style={{ fontSize: 10.5, color: "var(--text-4)", marginBottom: 10 }}>
+                          Selects from the Evidence Repository — doesn't create a new record.
+                        </div>
+                        <input
+                          className="input"
+                          style={{ fontSize: 12.5 }}
+                          placeholder="Search evidence by ID, type, source, notes…"
+                          value={evidenceSearch}
+                          autoFocus
+                          onChange={e => { setEvidenceSearch(e.target.value); searchEvidence(e.target.value); }}
+                        />
+                      </div>
 
-                        {/* Type selector */}
-                        <div style={{ marginBottom: 10 }}>
-                          <div style={{ fontSize: 10.5, fontWeight: 600, color: "var(--text-4)", marginBottom: 5, letterSpacing: "0.04em" }}>TYPE</div>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
-                            {[
-                              { value: "Transaction Record", icon: "⇄" },
-                              { value: "Wallet Data",        icon: "◎" },
-                              { value: "Blockchain Analysis",icon: "⛓" },
-                              { value: "Network Communication", icon: "⚡" },
-                              { value: "Document",           icon: "📄" },
-                              { value: "IP Log",             icon: "🌐" },
-                              { value: "Screenshot",         icon: "📷" },
-                              { value: "Financial Report",   icon: "📊" },
-                            ].map(t => (
-                              <button
-                                key={t.value}
-                                type="button"
-                                onClick={() => setEvidenceType(t.value)}
-                                style={{
-                                  display: "flex", alignItems: "center", gap: 6,
-                                  padding: "6px 9px", borderRadius: 6, fontSize: 11.5,
-                                  background: evidenceType === t.value ? "rgba(99,102,241,0.18)" : "rgba(255,255,255,0.04)",
-                                  border: `1px solid ${evidenceType === t.value ? "rgba(99,102,241,0.4)" : "rgba(255,255,255,0.07)"}`,
-                                  color: evidenceType === t.value ? "var(--accent-hi)" : "var(--text-3)",
-                                  cursor: "pointer", transition: "all 0.13s", textAlign: "left",
-                                  fontFamily: "Inter,sans-serif",
-                                }}
-                              >
-                                <span style={{ fontSize: 12 }}>{t.icon}</span>
-                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.value}</span>
-                              </button>
-                            ))}
+                      {/* Results — real EvidenceRecord rows from the repository */}
+                      <div style={{ maxHeight: 280, overflowY: "auto" }}>
+                        {evidenceSearching && (
+                          <div style={{ padding: "14px", fontSize: 12, color: "var(--text-4)", textAlign: "center" }}>Searching…</div>
+                        )}
+                        {!evidenceSearching && evidenceResults.length === 0 && (
+                          <div style={{ padding: "14px", fontSize: 12, color: "var(--text-4)", textAlign: "center" }}>
+                            {evidenceSearch.trim() ? "No evidence found" : "No evidence in the repository yet"}
                           </div>
-                        </div>
-
-                        {/* Description */}
-                        <div>
-                          <div style={{ fontSize: 10.5, fontWeight: 600, color: "var(--text-4)", marginBottom: 5, letterSpacing: "0.04em" }}>DESCRIPTION</div>
-                          <textarea
-                            className="input"
-                            style={{ minHeight: 60, resize: "vertical", fontSize: 12 }}
-                            placeholder="Source reference, hash, or brief description…"
-                            value={evidenceSource}
-                            autoFocus
-                            onChange={e => setEvidenceSource(e.target.value)}
-                          />
-                        </div>
+                        )}
+                        {evidenceResults.map(ev => {
+                          const rawId = ev.id;
+                          const isAttached = alreadyAttachedIds.has(rawId);
+                          const isSelected = selectedEvidenceIds.has(rawId);
+                          return (
+                            <div
+                              key={rawId}
+                              style={{
+                                display: "flex", alignItems: "center", gap: 10, padding: "9px 14px",
+                                borderBottom: "1px solid rgba(255,255,255,0.04)",
+                                opacity: isAttached ? 0.5 : 1,
+                              }}
+                            >
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                                  <span className="mono-sm" style={{ color: "var(--accent-hi)" }}>{ev.displayId ?? ev.id}</span>
+                                  <span className={`badge ${ev.status === "VERIFIED" ? "badge-verified" : ev.status === "REJECTED" ? "badge-critical" : "badge-pending"}`} style={{ fontSize: 9 }}>{ev.status}</span>
+                                </div>
+                                <div style={{ fontSize: 12, color: "var(--text-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>{ev.type}</div>
+                                <div style={{ fontSize: 10.5, color: "var(--text-4)", marginTop: 1 }}>
+                                  {ev.source?.name ? `${ev.source.name} · ` : ""}{ev.createdAt ? new Date(ev.createdAt).toLocaleDateString() : "—"}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                className={`btn btn-sm ${isSelected ? "btn-primary" : "btn-ghost"}`}
+                                style={{ flexShrink: 0, fontSize: 10.5 }}
+                                disabled={isAttached}
+                                onClick={() => toggleSelectEvidence(rawId)}
+                              >
+                                {isAttached ? "Already Added" : isSelected ? "✓ Selected" : "Select"}
+                              </button>
+                            </div>
+                          );
+                        })}
                       </div>
 
                       {addEvidenceError && (
                         <div style={{ padding: "8px 14px", fontSize: 11.5, color: "var(--critical-light)" }}>{addEvidenceError}</div>
                       )}
                       {addEvidenceSuccess && (
-                        <div style={{ padding: "8px 14px", fontSize: 11.5, color: "#4ade80" }}>✓ Evidence added</div>
+                        <div style={{ padding: "8px 14px", fontSize: 11.5, color: "#4ade80" }}>✓ Evidence attached</div>
                       )}
 
                       <div style={{ display: "flex", gap: 8, padding: "10px 14px", borderTop: "1px solid rgba(255,255,255,0.06)" }}>
@@ -946,11 +1003,11 @@ export function WorkspaceScreen({
                           className="btn btn-primary btn-sm"
                           style={{ flex: 1, justifyContent: "center" }}
                           onClick={submitAddEvidence}
-                          disabled={addingEvidence}
+                          disabled={addingEvidence || selectedEvidenceIds.size === 0}
                         >
-                          {addingEvidence ? "Adding…" : "Add Evidence"}
+                          {addingEvidence ? "Attaching…" : `Add Selected${selectedEvidenceIds.size ? ` (${selectedEvidenceIds.size})` : ""}`}
                         </button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => { setShowAddEvidence(false); setEvidenceSource(""); }}>Cancel</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => { setShowAddEvidence(false); setEvidenceSearch(""); setEvidenceResults([]); setSelectedEvidenceIds(new Set()); }}>Cancel</button>
                       </div>
                     </div>
                   )}
@@ -1487,7 +1544,7 @@ export function WorkspaceScreen({
             ))}
           </div>
 
-          <button className="btn btn-ghost" style={{ justifyContent: "center" }} onClick={() => navigate("timeline")}>
+          <button className="btn btn-ghost" style={{ justifyContent: "center" }} onClick={() => navigate("timeline", inv.id)}>
             View Investigation Timeline
           </button>
           {/* Was navigate("graph") with no id, which always opened the

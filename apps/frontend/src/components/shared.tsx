@@ -2,6 +2,17 @@ import { riskColor, riskColorLight, riskLabel, caseTimeline } from "../data";
 
 // Small shared presentational components used across multiple screens.
 
+// Canonical evidence types used everywhere an investigator can add evidence.
+// Keeping this list in one place prevents the Investigation Workspace and the
+// Evidence Repository from drifting apart or showing unsupported types.
+export const EVIDENCE_TYPES = [
+  { value: "Intelligence Record", icon: "🧠" },
+  { value: "Wallet Transaction Log", icon: "◎" },
+  { value: "Communication Record", icon: "💬" },
+  { value: "Network Analysis Report", icon: "⚡" },
+  { value: "Listing Capture", icon: "▣" },
+] as const;
+
 export function Sparkline({ data, color }: { data: number[]; color: string }) {
   const max = Math.max(...data, 1);
 const pts = data.map((v, i) => `${(i / (data.length - 1)) * 56},${18 - (v / max) * 16}`).join(" ");
@@ -102,6 +113,8 @@ export function BarContrib({ label, value, max = 28, color }: { label: string; v
     </div>
   );
 }
+
+export type TimelineEvent = typeof caseTimeline[number];
 
 export function TimelineView({ events = caseTimeline }: { events?: typeof caseTimeline }) {
   return (

@@ -74,6 +74,26 @@ evidenceRouter.post(
       });
     }
 
+    const allowedEvidenceTypes = new Set([
+      "Intelligence Record",
+      "Wallet Transaction Log",
+      "Communication Record",
+      "Network Analysis Report",
+      "Listing Capture",
+    ]);
+
+    if (!allowedEvidenceTypes.has(String(type).trim())) {
+      return res.status(400).json({
+        error: "Unsupported evidence type",
+        allowedTypes: Array.from(allowedEvidenceTypes),
+      });
+    }
+
+    const investigation = await prisma.investigation.findUnique({ where: { id: investigationId } });
+    if (!investigation) {
+      return res.status(404).json({ error: "Investigation not found" });
+    }
+
     const hash = crypto
       .createHash("sha256")
       .update(content ?? "")
