@@ -46,26 +46,32 @@ export function ReportsScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preselectedDisplayId]);
 
+  // ── Generate the report ──────────────────────────────────────────────
+  // Delegates ALL section-building to POST /api/reports/generate — the
+  // backend pulls the real investigation (entities, network, evidence,
+  // timeline, AI assessment) via Prisma and computes each section's
+  // content live, branching depth by `reportType`. Every field we send
+  // here (selectedInvId, reportType, classification, checked) is exactly
+  // what changes the output, so switching any of them and clicking
+  // "Generate Secure Report" again always re-fetches and re-renders —
+  // nothing is cached from a previous generation.
   const generateReport = async () => {
     if (!selectedInvId) { setGenError("Select an investigation first."); return; }
     setGenerating(true);
     setGenError(null);
     try {
-      const data = await apiGet<any>(`/api/investigations/${selectedInvId}`);
-      setReportData(data);
-      setGeneratedAt(new Date());
-      setGenerated(true);
-      // Real audit record — this is what makes the "recorded in the
-      // platform audit log" line in the Audit Information section true
-      // rather than an unfulfilled claim. Fire-and-forget: a logging
-      // hiccup shouldn't block the report the investigator already has.
-      apiPost(`/api/investigations/${selectedInvId}/report-generated`, {
-        generatedBy: "Investigator A",
+      const data = await apiPost<any>(`/api/reports/generate`, {
+        investigationId: selectedInvId,
         reportType,
         classification,
-      }).catch(() => {});
+        sections: checked,
+      });
+      setReportData(data);
+      setGeneratedAt(new Date(data.generatedAt));
+      setGenerated(true);
     } catch (err: any) {
       setGenError(err.message ?? "Failed to generate report — could not reach the API.");
+      setGenerated(false);
     } finally {
       setGenerating(false);
     }
@@ -95,152 +101,11 @@ export function ReportsScreen({
     }
   };
 
-  // ── Compose report sections from REAL fetched data ──────────────────────
-  // Nothing here is invented client-side: every number/fact comes from
-  // reportData, which is the actual investigation record from Postgres.
-  // recommendedNext / editedRecommendedNext are stored as JSON-stringified
-  // arrays — parse defensively so the report never prints raw JSON.
-  const parseSteps = (raw: any): string[] => {
-    if (!raw) return [];
-    if (Array.isArray(raw)) return raw;
-    try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [String(raw)];
-    } catch {
-      return [String(raw)];
-    }
-  };
-
-  const buildSections = () => {
-    if (!reportData) return [];
-    const inv = reportData;
-    const network = inv.network;
-    const entityList = (inv.entities ?? []).map((e: any) => e.entity ?? e);
-    const evidenceList = inv.evidence ?? [];
-    const timeline = inv.timeline ?? [];
-    const assessment = (inv.aiAssessments ?? [])[0];
-    const verifiedCount = evidenceList.filter((e: any) => e.status === "VERIFIED").length;
-    const pendingCount = evidenceList.filter((e: any) => e.status === "PENDING").length;
-    const entityNames = entityList.map((e: any) => e.alias).join(", ") || "none resolved";
-    const topConfidence = entityList.length ? Math.max(...entityList.map((e: any) => e.confidence ?? 0)) : null;
-
-    const out: { t: string; c?: string; ai?: {
-      tone: "accepted" | "rejected" | "modified" | "pending" | "none";
-      badgeLabel: string;
-      byline?: string;
-      body?: string;
-      steps?: string[];
-      footer?: string;
-    } }[] = [];
-
-    if (checked["Executive Summary"]) out.push({
-      t: "Executive Summary",
-      c: `Investigation ${inv.displayId} (${inv.title}) is currently ${inv.status?.replace(/_/g," ")}, priority ${inv.priority}.` +
-         (network ? ` It is linked to network ${network.displayId}, risk score ${network.risk}/100 (${network.status}).` : " No network is currently linked to this case.") +
-         (entityList.length ? ` ${entityList.length} entit${entityList.length===1?"y has":"ies have"} been resolved to this case${topConfidence!==null?`, with the strongest resolution confidence at ${topConfidence}%`:""}.` : " No entities have been added to this case yet."),
-    });
-
-    if (checked["Risk Assessment"]) out.push({
-      t: "Risk Assessment",
-      c: network
-        ? `Overall network risk: ${network.status} (${network.risk}/100), a change of ${network.change >= 0 ? "+" : ""}${network.change} points since first detection.` +
-          (assessment?.signals?.length ? ` Contributing signals: ${assessment.signals.map((s: any) => `${s.label} (+${s.value})`).join(", ")}.` : "")
-        : "No network is linked to this investigation, so no aggregate network risk score is available. Risk should be assessed per-entity.",
-    });
-
-    if (checked["Entity Analysis"]) out.push({
-      t: "Entity Analysis",
-      c: entityList.length
-        ? `${entityList.length} entit${entityList.length===1?"y":"ies"} identified: ${entityNames}. ` +
-          entityList.map((e: any) => `${e.alias} — risk ${e.risk}/100, confidence ${e.confidence}%`).join("; ") + "."
-        : "No entities have been resolved to this investigation yet.",
-    });
-
-    if (checked["Network Analysis"]) out.push({
-      t: "Network Analysis",
-      c: network
-        ? `Network ${network.displayId} status: ${network.status}. Risk trajectory shows a ${network.change >= 0 ? "increase" : "decrease"} of ${Math.abs(network.change)} points. Last activity recorded ${new Date(network.lastActivity).toLocaleString()}.`
-        : "This investigation is not currently associated with a tracked network.",
-    });
-
-    if (checked["Evidence Summary"]) out.push({
-      t: "Evidence Summary",
-      c: `${evidenceList.length} evidence record${evidenceList.length===1?"":"s"} collected. ${verifiedCount} verified via SHA-256 hash, ${pendingCount} pending verification.` +
-         (evidenceList.length ? ` Evidence IDs: ${evidenceList.map((e: any) => e.displayId).join(", ")}.` : ""),
-    });
-
-    if (checked["Investigation Timeline"]) out.push({
-      t: "Investigation Timeline",
-      c: timeline.length
-        ? `${timeline.length} recorded timeline event${timeline.length===1?"":"s"}, spanning from ${new Date(timeline[0].occurredAt).toLocaleDateString()} to ${new Date(timeline[timeline.length-1].occurredAt).toLocaleDateString()}. Most recent: "${timeline[timeline.length-1].label}" (${timeline[timeline.length-1].type}).`
-        : "No timeline events have been recorded for this investigation yet.",
-    });
-
-    if (checked["AI Explanation"]) {
-      if (!assessment) {
-        out.push({ t: "AI Explanation", c: "No AI assessment has been generated for this investigation yet." });
-      } else {
-        const byline = (label: string) =>
-          `${label}${assessment.reviewedBy ? ` by ${assessment.reviewedBy}` : ""}${assessment.reviewedAt ? ` on ${new Date(assessment.reviewedAt).toLocaleDateString()}` : ""}`;
-
-        if (assessment.reviewStatus === "REJECTED") {
-          out.push({
-            t: "AI Explanation",
-            ai: {
-              tone: "rejected",
-              badgeLabel: "Rejected",
-              byline: byline("Rejected"),
-              footer: assessment.reviewNote
-                ? `Reason given: "${assessment.reviewNote}"`
-                : `This AI-generated narrative was not accepted and is excluded from this report. (Risk score at time of assessment: ${assessment.riskScore}/100.)`,
-            },
-          });
-        } else if (assessment.reviewStatus === "MODIFIED") {
-          out.push({
-            t: "AI Explanation",
-            ai: {
-              tone: "modified",
-              badgeLabel: "Modified",
-              byline: byline("Modified"),
-              body: assessment.editedExplanation,
-              steps: parseSteps(assessment.editedRecommendedNext),
-              footer: `Risk score at time of assessment: ${assessment.riskScore}/100. This is the investigator-edited version of the original AI-generated narrative.`,
-            },
-          });
-        } else if (assessment.reviewStatus === "ACCEPTED") {
-          out.push({
-            t: "AI Explanation",
-            ai: {
-              tone: "accepted",
-              badgeLabel: "Accepted",
-              byline: byline("Accepted"),
-              body: assessment.explanation,
-              steps: parseSteps(assessment.recommendedNext),
-              footer: `Risk score at time of assessment: ${assessment.riskScore}/100.`,
-            },
-          });
-        } else {
-          out.push({
-            t: "AI Explanation",
-            ai: {
-              tone: "pending",
-              badgeLabel: "Pending Review",
-              body: assessment.explanation,
-              steps: parseSteps(assessment.recommendedNext),
-              footer: `Risk score at time of assessment: ${assessment.riskScore}/100. This assessment has not yet been reviewed by an investigator.`,
-            },
-          });
-        }
-      }
-    }
-
-    if (checked["Audit Information"]) out.push({
-      t: "Audit Information",
-      c: `Report generated ${generatedAt?.toLocaleString()} for case ${inv.displayId}, classification ${classification}, report type "${reportType}". This document and its generation are recorded in the platform audit log.`,
-    });
-
-    return out;
-  };
+  // Sections now arrive pre-built from POST /api/reports/generate — see
+  // lib/reportGenerator.ts. Nothing is composed client-side anymore, so
+  // there's no risk of the preview drifting from what the backend
+  // actually computed (which is what let Risk Assessment go stale before).
+  const reportSections: any[] = reportData?.sections ?? [];
 
   const selectedInv = invOptions.find(i => i.id === selectedInvId);
 
@@ -330,42 +195,42 @@ export function ReportsScreen({
           )}
           <div style={{textAlign:"center",marginBottom:28,paddingBottom:22,borderBottom:"2px solid rgba(99,102,241,0.3)"}}>
             <div style={{fontSize:9.5,color:"var(--text-4)",letterSpacing:"0.15em",textTransform:"uppercase",marginBottom:8}}>NEXUS INTELLIGENCE PLATFORM</div>
-            <div className="display" style={{fontSize:22,fontWeight:800,color:"var(--text-1)",letterSpacing:"-0.02em",marginBottom:6}}>INTELLIGENCE ASSESSMENT REPORT</div>
+            <div className="display" style={{fontSize:22,fontWeight:800,color:"var(--text-1)",letterSpacing:"-0.02em",marginBottom:6}}>{reportData?.reportTitle ?? "INTELLIGENCE ASSESSMENT REPORT"}</div>
             <div style={{display:"flex",justifyContent:"center",gap:22,fontSize:11,color:"var(--text-3)"}}>
-              <span>Case: <span className="mono" style={{color:"var(--accent-hi)"}}>{reportData?.displayId ?? selectedInv?.displayId ?? "—"}</span></span>
-              <span>Risk: <span style={{color:reportData?.network ? "var(--critical-light)" : "var(--text-3)",fontWeight:600}}>{reportData?.network?.status ?? "—"}</span></span>
+              <span>Case: <span className="mono" style={{color:"var(--accent-hi)"}}>{reportData?.investigation?.displayId ?? selectedInv?.displayId ?? "—"}</span></span>
+              <span>Risk: <span style={{color:reportData?.headerRisk ? "var(--critical-light)" : "var(--text-3)",fontWeight:600}}>{reportData?.headerRisk ? `${reportData.headerRisk.label} (${reportData.headerRisk.value}/100)${reportData.headerRisk.kind === "entity" ? " — top entity, no linked network" : ""}` : "—"}</span></span>
               <span>Generated: <span style={{color:"var(--text-2)"}}>{generatedAt ? generatedAt.toLocaleDateString() : "—"}</span></span>
             </div>
           </div>
 
           {generated && reportData ? (
             <div>
-              {buildSections().map(s=>(
-                <div key={s.t} style={{marginBottom:20}}>
-                  <div style={{fontSize:10.5,fontWeight:700,color:"var(--accent-hi)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:7}}>{s.t}</div>
+              {reportSections.map(s=>(
+                <div key={s.title} style={{marginBottom:20}}>
+                  <div style={{fontSize:10.5,fontWeight:700,color:"var(--accent-hi)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:7}}>{s.title}</div>
 
-                  {s.ai ? (
+                  {s.kind === "ai" ? (
                     <div>
                       <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:10}}>
                         <span className={`badge ${
-                          s.ai.tone === "accepted" ? "badge-low" :
-                          s.ai.tone === "rejected" ? "badge-critical" :
-                          s.ai.tone === "modified" ? "badge-accent" : "badge-pending"
-                        }`}>{s.ai.badgeLabel}</span>
-                        {s.ai.byline && <span style={{fontSize:11,color:"var(--text-4)"}}>{s.ai.byline}</span>}
+                          s.tone === "accepted" ? "badge-low" :
+                          s.tone === "rejected" ? "badge-critical" :
+                          s.tone === "modified" ? "badge-accent" : "badge-pending"
+                        }`}>{s.badgeLabel}</span>
+                        {s.byline && <span style={{fontSize:11,color:"var(--text-4)"}}>{s.byline}</span>}
                       </div>
 
-                      {s.ai.body && (
-                        <div style={{fontSize:12.5,color:"var(--text-2)",lineHeight:1.72,marginBottom:s.ai.steps?.length?14:8}}>
-                          {s.ai.body}
+                      {s.body && (
+                        <div style={{fontSize:12.5,color:"var(--text-2)",lineHeight:1.72,marginBottom:s.steps?.length?14:8}}>
+                          {s.body}
                         </div>
                       )}
 
-                      {s.ai.steps && s.ai.steps.length > 0 && (
+                      {s.steps && s.steps.length > 0 && (
                         <div style={{marginBottom:10}}>
                           <div style={{fontSize:11.5,fontWeight:700,color:"var(--text-1)",marginBottom:8}}>Recommended next steps:</div>
                           <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                            {s.ai.steps.map((step,i)=>(
+                            {s.steps.map((step: string, i: number)=>(
                               <div key={i} style={{display:"flex",gap:8,fontSize:12,color:"var(--text-2)",lineHeight:1.6}}>
                                 <span style={{color:"var(--accent-hi)",fontWeight:700,flexShrink:0}}>{i+1}.</span>
                                 <span>{step}</span>
@@ -375,12 +240,12 @@ export function ReportsScreen({
                         </div>
                       )}
 
-                      {s.ai.footer && (
-                        <div style={{fontSize:11,color:"var(--text-4)",lineHeight:1.6,fontStyle:"italic"}}>{s.ai.footer}</div>
+                      {s.footer && (
+                        <div style={{fontSize:11,color:"var(--text-4)",lineHeight:1.6,fontStyle:"italic"}}>{s.footer}</div>
                       )}
                     </div>
                   ) : (
-                    <div style={{fontSize:12.5,color:"var(--text-2)",lineHeight:1.72}}>{s.c}</div>
+                    <div style={{fontSize:12.5,color:"var(--text-2)",lineHeight:1.72}}>{s.content}</div>
                   )}
                 </div>
               ))}

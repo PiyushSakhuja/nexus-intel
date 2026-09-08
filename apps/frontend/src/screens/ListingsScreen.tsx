@@ -4,7 +4,7 @@ import { RingScore, RiskBadge, PulseIndicator } from "../components/shared";
 import { apiGet } from "../lib/api";
 import { getSocket } from "../lib/socket";
 
-export function BlockchainScreen({ selectedId }: { selectedId?: string | null } = {}) {
+export function ListingsScreen({ selectedId }: { selectedId?: string | null } = {}) {
   const [walletRows, setWalletRows] = useState<any[]>([]);
   const [walletsLoading, setWalletsLoading] = useState(true);
   const [walletsError, setWalletsError] = useState<string|null>(null);
