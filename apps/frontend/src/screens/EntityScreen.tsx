@@ -8,6 +8,7 @@ import {
   PulseIndicator, BarContrib,
 } from "../components/shared";
 import { apiGet, apiPost } from "../lib/api";
+import { getSocket } from "../lib/socket";
 
 // Readable labels for the backend's CorrelationSignal enum — presentation
 // only, doesn't change the underlying signal identifiers.
@@ -201,6 +202,26 @@ export function EntityScreen({ entity: entityProp, navigate }: { entity: Entity;
       .then(data => { setLive(data); setError(null); })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
+  }, [displayId]);
+
+  // Risk/correlation/listings here are all derived live from Listing rows
+  // (see routes/entities.ts), so a new real listing landing via the
+  // producer (POST /api/ingest/event -> a genuine Listing row) can change
+  // this entity's numbers and correlated-listing list — re-pull rather
+  // than leaving the screen stale until a manual reload.
+  useEffect(() => {
+    if (!displayId) return;
+    const socket = getSocket();
+    const onEvent = (evt: any) => {
+      const relevantTypes = ["event_detected", "correlation", "wallet_updated"];
+      if (!relevantTypes.includes(evt.type)) return;
+      if (evt.payload?.entityDisplayId && evt.payload.entityDisplayId !== displayId) return;
+      apiGet<any>(`/api/entities/${encodeURIComponent(displayId)}`)
+        .then(data => { setLive(data); setError(null); })
+        .catch(() => {});
+    };
+    socket.on("intelligence-event", onEvent);
+    return () => { socket.off("intelligence-event", onEvent); };
   }, [displayId]);
 
   // `source` prefers the live fetch once it resolves; entityProp (passed in
