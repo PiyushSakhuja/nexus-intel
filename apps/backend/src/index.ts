@@ -15,6 +15,7 @@ import { graphRouter } from "./routes/graph.js";
 import { reportsRouter } from "./routes/reports.js";
 import { simulateRouter } from "./routes/simulate.js";
 import { ingestRouter } from "./routes/ingest.js";
+import { crawlerRouter } from "./routes/crawler.js";
 import { vendorsRouter } from "./routes/vendors.js";
 
 import { dashboardRouter, analyticsRouter } from "./routes/dashboard.js";
@@ -53,6 +54,7 @@ app.use("/api/graph", graphRouter);
 app.use("/api/reports", reportsRouter);
 app.use("/api/simulate", simulateRouter);
 app.use("/api/ingest", ingestRouter);
+app.use("/api/crawler", crawlerRouter);
 app.use("/api/evidence", evidenceRouter);
 app.use("/api/wallets", walletsRouter);
 app.use("/api/listings", listingsRouter);
