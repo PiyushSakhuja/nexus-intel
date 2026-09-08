@@ -436,6 +436,40 @@ model User {
   email     String   @unique
   role      Role     @default(INVESTIGATOR)
   createdAt DateTime @default(now())
+
+  // ── Auth ────────────────────────────────────────────────────────────────
+  // Argon2id hash (see src/lib/auth.ts) — never the plaintext password.
+  passwordHash String?
+
+  // Basic brute-force protection: incremented on each failed login,
+  // reset on success. When failedLoginAttempts crosses a threshold,
+  // lockedUntil is set and login is refused (even with the right
+  // password) until that time passes — see src/routes/auth.ts.
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+
+  sessions  Session[]
+}
+
+// A server-side session — the source of truth for "is this user actually
+// logged in right now". Only tokenHash is stored (SHA-256 of the random
+// token that's actually set in the user's cookie); the raw token never
+// touches the database, so a DB leak alone can't be replayed as a valid
+// session. expiresAt is the absolute lifetime cap; lastActiveAt is bumped
+// on each authenticated request and used for the shorter idle timeout —
+// see src/middleware/auth.ts.
+model Session {
+  id           String   @id @default(cuid())
+  tokenHash    String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  lastActiveAt DateTime @default(now())
+  expiresAt    DateTime
+  ip           String?
+  userAgent    String?
+
+  @@index([userId])
 }
 
 enum TxnDirection {
@@ -459,4 +493,5 @@ model WalletTransaction {
   occurredAt  DateTime
   createdAt   DateTime     @default(now())
 }
+
 

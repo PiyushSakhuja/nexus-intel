@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { apiPost, ApiError } from "../lib/api";
+
+export type AuthedUser = { id: string; name: string; email: string; role: string };
 
 function LoginNetworkViz() {
   const nodes = [
@@ -40,15 +43,31 @@ function LoginNetworkViz() {
   );
 }
 
-export function LoginScreen({ onLogin }: { onLogin: () => void }) {
+export function LoginScreen({ onLogin }: { onLogin: (user: AuthedUser) => void }) {
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!id.trim() || !pw) return;
     setLoading(true);
-    setTimeout(() => { setLoading(false); onLogin(); }, 1400);
+    setError(null);
+    try {
+      // "Investigator ID" in the UI is the account's email — kept as one
+      // field rather than adding a separate email input, matching what
+      // was already there.
+      const { user } = await apiPost<{ user: AuthedUser }>("/api/auth/login", {
+        email: id.trim(),
+        password: pw,
+      });
+      onLogin(user);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't reach the server. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -77,16 +96,38 @@ export function LoginScreen({ onLogin }: { onLogin: () => void }) {
             <div style={{fontSize:12.5,color:"var(--text-3)"}}>Secure Investigative Intelligence</div>
           </div>
 
-          <form onSubmit={submit}>
+          <form onSubmit={submit} autoComplete="off">
             <div style={{marginBottom:14}}>
               <label style={{display:"block",fontSize:10.5,color:"var(--text-3)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>Investigator ID</label>
-              <input className="input" placeholder="Enter investigator ID" value={id} onChange={e=>setId(e.target.value)} autoComplete="username"/>
+              <input
+                className="input"
+                placeholder="Enter investigator ID"
+                value={id}
+                onChange={e=>setId(e.target.value)}
+                autoComplete="off"
+                readOnly
+                onFocus={e => e.currentTarget.removeAttribute("readonly")}
+              />
             </div>
             <div style={{marginBottom:22}}>
               <label style={{display:"block",fontSize:10.5,color:"var(--text-3)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>Password</label>
-              <input className="input" type="password" placeholder="••••••••••••" value={pw} onChange={e=>setPw(e.target.value)} autoComplete="current-password"/>
+              <input
+                className="input"
+                type="password"
+                placeholder="••••••••••••"
+                value={pw}
+                onChange={e=>setPw(e.target.value)}
+                autoComplete="new-password"
+                readOnly
+                onFocus={e => e.currentTarget.removeAttribute("readonly")}
+              />
             </div>
-            <button type="submit" className="btn btn-primary btn-lg" style={{width:"100%",justifyContent:"center",marginBottom:16}}>
+            {error && (
+              <div style={{marginBottom:14,padding:"9px 12px",background:"rgba(220,38,38,0.08)",border:"1px solid rgba(220,38,38,0.2)",borderRadius:7,fontSize:12,color:"var(--critical-light)"}}>
+                {error}
+              </div>
+            )}
+            <button type="submit" className="btn btn-primary btn-lg" style={{width:"100%",justifyContent:"center",marginBottom:16}} disabled={loading}>
               {loading
                 ? <><span style={{width:14,height:14,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.7s linear infinite",display:"inline-block"}}/> Authenticating…</>
                 : "Sign In Securely"}

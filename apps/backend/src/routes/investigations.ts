@@ -15,6 +15,7 @@ import { computeVendorRisk, type VendorRisk } from "../lib/vendorRisk.js";
 import { computeEntityRisk, type EntityComputedRisk } from "../lib/entityRisk.js";
 import type { ListingInput } from "../lib/riskEngine.js";
 import { bfsSubgraph } from "../lib/graphTraversal.js";
+import { requireRole } from "../middleware/auth.js";
 
 export const investigationsRouter = Router();
 
@@ -39,7 +40,10 @@ async function buildVendorRiskMap(): Promise<Map<string, VendorRisk>> {
 }
 
 // POST /api/investigations — create a new investigation
-investigationsRouter.post("/", asyncHandler(async (req, res) => {
+investigationsRouter.post(
+  "/",
+  requireRole("ADMINISTRATOR", "INVESTIGATOR"),
+  asyncHandler(async (req, res) => {
   const {
     title,
     description,
@@ -106,6 +110,7 @@ investigationsRouter.post("/", asyncHandler(async (req, res) => {
 // DELETE /api/investigations/:displayId
 investigationsRouter.delete(
   "/:displayId",
+  requireRole("ADMINISTRATOR", "INVESTIGATOR"),
   asyncHandler(async (req, res) => {
     const inv = await prisma.investigation.findUnique({
       where: {
@@ -168,6 +173,7 @@ investigationsRouter.get(
 // PATCH /api/investigations/:displayId — update assignee, status, priority, etc.
 investigationsRouter.patch(
   "/:displayId",
+  requireRole("ADMINISTRATOR", "INVESTIGATOR"),
   asyncHandler(async (req, res) => {
     const inv = await prisma.investigation.findUnique({
       where: {
@@ -277,6 +283,7 @@ investigationsRouter.patch(
 // POST /api/investigations/:displayId/entities — link an entity to an investigation
 investigationsRouter.post(
   "/:displayId/entities",
+  requireRole("ADMINISTRATOR", "INVESTIGATOR"),
   asyncHandler(async (req, res) => {
     const { entityId } = req.body as {
       entityId?: string;
@@ -358,6 +365,7 @@ investigationsRouter.post(
 // original/home investigation or duplicating it.
 investigationsRouter.post(
   "/:displayId/evidence",
+  requireRole("ADMINISTRATOR", "INVESTIGATOR"),
   asyncHandler(async (req, res) => {
     const { evidenceIds } = req.body as {
       evidenceIds?: unknown;
@@ -493,6 +501,7 @@ investigationsRouter.post(
 // something to remove.
 investigationsRouter.delete(
   "/:displayId/evidence/:evidenceId",
+  requireRole("ADMINISTRATOR", "INVESTIGATOR"),
   asyncHandler(async (req, res) => {
     const inv = await prisma.investigation.findUnique({
       where: {
@@ -558,6 +567,7 @@ investigationsRouter.delete(
 // DELETE /api/investigations/:displayId/entities/:entityId
 investigationsRouter.delete(
   "/:displayId/entities/:entityId",
+  requireRole("ADMINISTRATOR", "INVESTIGATOR"),
   asyncHandler(async (req, res) => {
     const inv = await prisma.investigation.findUnique({
       where: {
@@ -915,6 +925,7 @@ res.json({
 // deterministic fallback narrative (aiGenerated: false).
 investigationsRouter.post(
   "/:displayId/ai-assessment",
+  requireRole("ADMINISTRATOR", "INVESTIGATOR"),
   asyncHandler(async (req, res) => {
     const inv = await prisma.investigation.findUnique({
       where: {
@@ -1102,6 +1113,7 @@ type ReviewAction =
 
 investigationsRouter.patch(
   "/:displayId/ai-assessment/:assessmentId/review",
+  requireRole("ADMINISTRATOR", "INVESTIGATOR"),
   asyncHandler(async (req, res) => {
     const {
       action,
@@ -1285,6 +1297,7 @@ investigationsRouter.patch(
 // investigation's assignee (no real auth in this app yet).
 investigationsRouter.post(
   "/:displayId/notes",
+  requireRole("ADMINISTRATOR", "INVESTIGATOR"),
   asyncHandler(async (req, res) => {
     const {
       content,
@@ -1357,6 +1370,7 @@ investigationsRouter.post(
 // on the frontend reads from.
 investigationsRouter.patch(
   "/:displayId/notes/:noteId",
+  requireRole("ADMINISTRATOR", "INVESTIGATOR"),
   asyncHandler(async (req, res) => {
     const {
       content,
@@ -1474,6 +1488,7 @@ investigationsRouter.patch(
 // DELETE /api/investigations/:displayId/notes/:noteId
 investigationsRouter.delete(
   "/:displayId/notes/:noteId",
+  requireRole("ADMINISTRATOR", "INVESTIGATOR"),
   asyncHandler(async (req, res) => {
     const inv = await prisma.investigation.findUnique({
       where: {

@@ -2,10 +2,15 @@ import "dotenv/config";
 
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import { createServer } from "node:http";
 import { Server } from "socket.io";
 
 import { setIo } from "./sockets/io.js";
+import { requireAuth, requireRole } from "./middleware/auth.js";
+
+import { authRouter } from "./routes/auth.js";
+import { usersRouter } from "./routes/users.js";
 
 import { entitiesRouter } from "./routes/entities.js";
 import { alertsRouter } from "./routes/alerts.js";
@@ -37,9 +42,7 @@ const FRONTEND_URL =
 const app = express();
 
 app.use(cors({ origin: FRONTEND_URL }));
-// Default 100kb limit is too small for base64-encoded evidence images
-// (POST /api/evidence's imageBase64 field) — bump it.
-app.use(express.json({ limit: "15mb" }));
+app.use(express.json());
 
 app.get("/api/health", (_req, res) =>
   res.json({
@@ -48,13 +51,14 @@ app.get("/api/health", (_req, res) =>
   })
 );
 
-app.use("/api/entities", entitiesRouter);
-app.use("/api/alerts", alertsRouter);
-app.use("/api/networks", networksRouter);
-app.use("/api/investigations", investigationsRouter);
-app.use("/api/graph", graphRouter);
-app.use("/api/reports", reportsRouter);
-app.use("/api/simulate", simulateRouter);
+// ── Auth (public — these routes enforce their own requirements
+// internally: /login is open, /logout and /me require an existing
+// session via requireAuth applied inside auth.ts) ──────────────────────
+app.use("/api/auth", authRouter);
+
+// ── Ingest keeps its existing shared-secret (x-ingest-key) auth — it's
+// called by a producer script, not a logged-in investigator, so it's
+// intentionally NOT behind requireAuth/session cookies. ─────────────────
 app.use("/api/ingest", ingestRouter);
 app.use("/api/evidence", evidenceRouter);
 app.use("/api/wallets", walletsRouter);
@@ -62,11 +66,10 @@ app.use("/api/listings", listingsRouter);
 app.use("/api/vendors", vendorsRouter);
 app.use("/api/audit-log", auditRouter);
 app.use("/api/sources", sourcesRouter);
-app.use("/api/scrape", scrapeRouter);
 
-app.use("/api/dashboard", dashboardRouter);
-app.use("/api/analytics", analyticsRouter);
-app.use("/api/search", searchRouter);
+app.use("/api/dashboard", requireAuth, dashboardRouter);
+app.use("/api/analytics", requireAuth, analyticsRouter);
+app.use("/api/search", requireAuth, searchRouter);
 
 // Global error handler — without this, an unhandled exception in any route
 // (e.g. a DB outage, a bad Prisma query) crashes out to Express's bare
@@ -94,6 +97,7 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
     origin: FRONTEND_URL,
+    credentials: true,
   },
 });
 
