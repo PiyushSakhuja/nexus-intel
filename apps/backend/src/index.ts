@@ -13,6 +13,7 @@ import { networksRouter } from "./routes/networks.js";
 import { investigationsRouter } from "./routes/investigations.js";
 import { graphRouter } from "./routes/graph.js";
 import { simulateRouter } from "./routes/simulate.js";
+import { ingestRouter } from "./routes/ingest.js";
 import { vendorsRouter } from "./routes/vendors.js";
 
 import { dashboardRouter, analyticsRouter } from "./routes/dashboard.js";
@@ -49,6 +50,7 @@ app.use("/api/networks", networksRouter);
 app.use("/api/investigations", investigationsRouter);
 app.use("/api/graph", graphRouter);
 app.use("/api/simulate", simulateRouter);
+app.use("/api/ingest", ingestRouter);
 app.use("/api/evidence", evidenceRouter);
 app.use("/api/wallets", walletsRouter);
 app.use("/api/listings", listingsRouter);

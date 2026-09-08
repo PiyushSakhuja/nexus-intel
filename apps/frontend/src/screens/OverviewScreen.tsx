@@ -6,10 +6,10 @@ import {
 } from "recharts";
 import { riskColor, riskColorLight } from "../data";
 import {
-  Sparkline, CustomTooltip, PulseIndicator,
+  Sparkline, CustomTooltip, PulseIndicator, RiskBadge,
 } from "../components/shared";
 import { getSocket, EVENT_META } from "../lib/socket";
-import { apiGet, apiPost } from "../lib/api";
+import { apiGet } from "../lib/api";
 
 export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void }) {
   const [liveNetworks, setLiveNetworks] = useState<any[]>([]);
@@ -17,10 +17,26 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
   const [activityTimeline, setActivityTimeline] = useState<any[]>([]);
   const [riskDistribution, setRiskDistribution] = useState<any[]>([]);
 
+  // ── Wallet activity state ────────────────────────────────────────────────
+  // Independent of loadDashboard() above — refreshed on mount and again
+  // every time a wallet_updated socket event lands, so the card below
+  // always reflects the freshly computed risk from the latest transaction
+  // evidence rather than a stale snapshot.
+  const [walletRows, setWalletRows] = useState<any[]>([]);
+  const [walletsUpdatedAt, setWalletsUpdatedAt] = useState<Date | null>(null);
+
   // ── Live feed state ──────────────────────────────────────────────────────
   const [feedEvents, setFeedEvents] = useState<any[]>([]);
   const [connected, setConnected]   = useState(false);
-  const [simulating, setSimulating] = useState(false);
+  // Whether the UI is currently accepting/processing incoming live-feed
+  // events. The producer (see /producer) runs as its own independent
+  // process — the frontend has no way to actually start/stop it — so this
+  // toggle controls whether THIS screen applies incoming events, and the
+  // separate connection badge above still reflects the real socket
+  // connected/disconnected state regardless of this toggle.
+  const [liveFeedOn, setLiveFeedOn] = useState(true);
+  const liveFeedOnRef = useRef(true);
+  useEffect(() => { liveFeedOnRef.current = liveFeedOn; }, [liveFeedOn]);
   const feedRef = useRef<HTMLDivElement>(null);
 
   // ── Fetch initial networks + KPIs + analytics ────────────────────────────
@@ -49,7 +65,22 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
       .catch(() => {});
   };
 
-  useEffect(() => { loadDashboard(); }, []);
+  // ── Fetch wallet risk (highest-risk wallets, for the Wallet Activity
+  // card) — same /api/wallets endpoint BlockchainScreen.tsx uses, just a
+  // lighter normalisation since this card only needs id + risk.
+  const loadWallets = () => {
+    apiGet<any[]>("/api/wallets")
+      .then(data => {
+        const normalised = data
+          .map((w: any) => ({ ...w, id: w.displayId ?? w.id, risk: w.risk ?? 0 }))
+          .sort((a, b) => b.risk - a.risk);
+        setWalletRows(normalised);
+        setWalletsUpdatedAt(new Date());
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => { loadDashboard(); loadWallets(); }, []);
 
   // ── Socket.IO subscription ───────────────────────────────────────────────
   useEffect(() => {
@@ -58,6 +89,8 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
     const onConnect    = () => setConnected(true);
     const onDisconnect = () => setConnected(false);
     const onEvent      = (evt: any) => {
+      if (!liveFeedOnRef.current) return; // live feed paused — ignore incoming events
+
       const now = new Date();
       const meta = EVENT_META[evt.type] ?? { label: evt.type, icon:"◎", color:"var(--text-3)" };
 
@@ -67,6 +100,7 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
       if (evt.type === "correlation")     detail = `${evt.payload?.entity ?? "Entity"} matched at ${evt.payload?.confidence ?? "?"}% confidence`;
       if (evt.type === "risk_updated")    detail = `${evt.payload?.network}: ${evt.payload?.from} → ${evt.payload?.to}`;
       if (evt.type === "alert_generated") detail = evt.payload?.title ?? "New alert created";
+      if (evt.type === "wallet_updated")  detail = `${evt.payload?.wallet ?? "Wallet"}: ${evt.payload?.direction === "OUTBOUND" ? "-" : "+"}${evt.payload?.amountBtcEq ?? "?"} BTC-eq (${evt.payload?.entity ?? "entity"})`;
 
       setFeedEvents(prev => [{
         id: `${evt.type}-${now.getTime()}`,
@@ -81,6 +115,13 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
       // not just the feed list.
       if (evt.type === "risk_updated" || evt.type === "alert_generated") {
         loadDashboard();
+      }
+
+      // New transaction evidence landed — refetch wallets so the Wallet
+      // Activity card shows the freshly computed risk immediately, rather
+      // than waiting for the next full dashboard refresh.
+      if (evt.type === "wallet_updated") {
+        loadWallets();
       }
     };
 
@@ -101,24 +142,12 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
     feedRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }, [feedEvents.length]);
 
-  // ── Simulate button handler ──────────────────────────────────────────────
-
-
-  const handleSimulate = async () => {
-  setSimulating(true);
-
-  try {
-    const targetNetwork = "N-018";
-
-    await apiPost("/api/simulate/event", {
-      networkDisplayId: targetNetwork,
-    });
-  } catch (_) {
-    /* socket events will show what happened */
-  } finally {
-    setSimulating(false);
-  }
-};
+  // ── Live feed toggle ──────────────────────────────────────────────────────
+  // Purely a local pause/resume for this screen's handling of incoming
+  // socket events (see the liveFeedOnRef check in onEvent above). Does NOT
+  // start or stop the producer process itself — that runs independently
+  // and keeps posting to the backend either way.
+  const toggleLiveFeed = () => setLiveFeedOn(v => !v);
 
   return (
     <div style={{padding:"26px 28px"}} className="anim-fade-up">
@@ -139,13 +168,12 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
             </span>
           </div>
           <button
-            className={`btn btn-sm ${simulating?"btn-ghost":"btn-primary"}`}
-            onClick={handleSimulate}
-            disabled={simulating}
+            className={`btn btn-sm ${liveFeedOn?"btn-primary":"btn-ghost"}`}
+            onClick={toggleLiveFeed}
             style={{minWidth:200,justifyContent:"center"}}>
-            {simulating
-              ? <><span style={{width:12,height:12,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 0.7s linear infinite",display:"inline-block",marginRight:6}}/> Simulating…</>
-              : "⚡ Simulate Incoming Intelligence"}
+            {liveFeedOn
+              ? <>⏸ Stop Live Feed</>
+              : <>▶ Start Live Feed</>}
           </button>
           <button className="btn btn-primary btn-sm" onClick={()=>navigate("investigations",{openNew:true})}>+ New Investigation</button>
         </div>
@@ -282,7 +310,9 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
             <div>
               <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)"}}>Live Intelligence Feed</div>
               <div style={{fontSize:10.5,color:"var(--text-3)",marginTop:1}}>
-                {connected
+                {!liveFeedOn
+                  ? <><span style={{color:"var(--text-4)"}}>⏸</span> Paused</>
+                  : connected
                   ? <><span style={{color:"var(--low-light)"}}>●</span> Real-time events</>
                   : <><span style={{color:"var(--text-4)"}}>○</span> Connecting…</>}
               </div>
@@ -299,9 +329,13 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
             {feedEvents.length === 0 && (
               <div style={{textAlign:"center",padding:"32px 0",color:"var(--text-4)"}}>
                 <div style={{fontSize:22,marginBottom:8,opacity:0.3}}>◎</div>
-                <div style={{fontSize:12}}>Waiting for live events…</div>
+                <div style={{fontSize:12}}>
+                  {liveFeedOn ? "Waiting for live events…" : "Live feed stopped"}
+                </div>
                 <div style={{fontSize:11,marginTop:4,color:"var(--text-4)"}}>
-                  Click <span style={{color:"var(--accent-hi)"}}>Simulate Incoming Intelligence</span> to trigger the pipeline
+                  {liveFeedOn
+                    ? "Events from the producer will appear here as they're ingested"
+                    : <>Click <span style={{color:"var(--accent-hi)"}}>Start Live Feed</span> to resume</>}
                 </div>
               </div>
             )}
@@ -361,6 +395,38 @@ export function OverviewScreen({ navigate }: { navigate:(s:string,d?:any)=>void 
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Wallet Activity — kept separate from the KPI/network refresh above
+          since it hits its own endpoint (GET /api/wallets) and refetches
+          specifically on wallet_updated, the moment new transaction
+          evidence lands (see lib/walletUpdate.ts / intelligencePipeline.ts
+          on the backend). */}
+      <div className="card" style={{padding:20,marginTop:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+          <div>
+            <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)"}}>Wallet Activity</div>
+            <div style={{fontSize:11,color:"var(--text-3)"}}>
+              {walletsUpdatedAt ? `Updated ${walletsUpdatedAt.toLocaleTimeString()}` : "Highest-risk tracked wallets"}
+            </div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={()=>navigate("blockchain")}>All Wallets</button>
+        </div>
+        {walletRows.length === 0 ? (
+          <div style={{padding:"20px 0",textAlign:"center",color:"var(--text-4)",fontSize:12}}>No wallets tracked yet.</div>
+        ) : (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+          {walletRows.slice(0,4).map(w=>(
+            <div key={w.id} style={{padding:"12px 14px",borderRadius:9,background:"rgba(255,255,255,0.025)",border:"1px solid var(--border)"}}>
+              <div className="mono" style={{fontSize:11.5,color:"var(--cyan)",marginBottom:6}}>{w.id}</div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontWeight:700,fontSize:16,color:riskColorLight(w.risk)}}>{w.risk}</span>
+                <RiskBadge score={w.risk}/>
+              </div>
+            </div>
+          ))}
+        </div>
+        )}
       </div>
     </div>
   );

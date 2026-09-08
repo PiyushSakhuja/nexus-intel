@@ -1,12 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { getIo } from "../sockets/io.js";
-import { computeSimulateScoreDelta } from "../lib/riskEngine.js";
-import { riskToStatus, RISK_THRESHOLDS } from "../lib/riskStatus.js";
-import { computeVendorRisk } from "../lib/vendorRisk.js";
-import { computeEntityRisk } from "../lib/entityRisk.js";
-import { correlateListings, getCorrelationForAlias } from "../lib/entityCorrelation.js";
-import type { ListingInput } from "../lib/riskEngine.js";
+import { runIntelligencePipeline } from "../lib/intelligencePipeline.js";
 import { logAudit, ipFromRequest } from "../lib/audit.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 
@@ -15,28 +10,24 @@ export const simulateRouter = Router();
 // POST /api/simulate/event
 // Body: { networkDisplayId: string, entityDisplayId?: string }
 //
-// This is the "Simulate Incoming Intelligence" button. It runs the real
-// pipeline end to end:
-//
-//   new event -> stored -> entity evidence correlated -> network risk
-//   recalculated -> risk point recorded -> threshold check -> alert created
-//   if crossed -> everything broadcast live over Socket.IO.
+// This is the "Simulate Incoming Intelligence" button. It resolves a
+// network + entity, picks a cosmetic event label, then hands off to
+// lib/intelligencePipeline.ts for the real work — correlation, risk,
+// alerts, and (new) wallet evidence. See that file's header for exactly
+// what it does and why the wallet step lives there instead of here.
 //
 // CHANGES from the previous version:
-//   1. Status thresholds now come from lib/riskStatus.ts instead of being
-//      duplicated inline here, so this file can no longer disagree with
-//      routes/networks.ts about what risk number means "HIGH" or "CRITICAL".
-//   2. The delta input now PREFERS the correlated entity's COMPUTED risk/
-//      confidence (real listing evidence via alias-correlated vendor — see
-//      lib/entityRisk.ts) and only falls back to the entity's stored/legacy
-//      risk/confidence when no listing evidence exists to correlate
-//      against. The response reports which source was actually used
-//      (`deltaInputSource`) so this is never silently ambiguous.
-//   3. The only remaining Math.random() in this file — picking which of the
-//      two cosmetic event-type labels ("listing_detected" vs
-//      "transaction_detected") to show — has been replaced with a
-//      deterministic selection based on the real accumulated RiskEvent
-//      count, so no randomness remains anywhere in this route.
+//   1. The correlate -> risk -> alert -> wallet pipeline body has moved
+//      to lib/intelligencePipeline.ts so routes/ingest.ts (real push
+//      ingestion, coming next) can call the exact same logic instead of
+//      duplicating it. Nothing about what this route DOES has changed —
+//      same inputs, same response shape, same behavior — only where the
+//      logic lives.
+//   2. Status thresholds still come from lib/riskStatus.ts (unchanged).
+//   3. The only remaining Math.random() in this file — picking which of
+//      the two cosmetic event-type labels to show — is still the
+//      deterministic accumulated-RiskEvent-count selection from before;
+//      no randomness anywhere in this route.
 simulateRouter.post("/event", asyncHandler(async (req, res) => {
   const { networkDisplayId, entityDisplayId } = req.body as {
     networkDisplayId?: string;
@@ -57,8 +48,7 @@ simulateRouter.post("/event", asyncHandler(async (req, res) => {
   if (!network) return res.status(404).json({ error: "Network not found" });
 
   // 1. New listing/transaction event detected. Deterministic selection —
-  // alternates based on the real total RiskEvent count so far, rather than
-  // Math.random().
+  // alternates based on the real total RiskEvent count so far.
   const eventTypes = [
     { type: "listing_detected", description: "New listing detected on monitored source" },
     { type: "transaction_detected", description: "New blockchain transaction detected" },
@@ -67,96 +57,20 @@ simulateRouter.post("/event", asyncHandler(async (req, res) => {
   const chosen = eventTypes[priorEventCount % eventTypes.length];
   emit("event_detected", chosen);
 
-  // 2. Entity correlation
+  // 2. Entity resolution — unchanged from before.
   const entity =
     (entityDisplayId && (await prisma.entity.findUnique({ where: { displayId: entityDisplayId } }))) ??
-    network.entities[0];
+    network.entities[0] ??
+    null;
 
-  // Listings loaded once and reused for both correlation (which listings
-  // belong to this entity, and how confidently) and the risk delta below
-  // (how risky is it) — same data, two intentionally separate computations
-  // per lib/entityCorrelation.ts's design (correlation and risk are never
-  // blended into one formula).
-  let deltaInput: { risk: number; confidence: number } | null = null;
-  let deltaInputSource: "computed" | "legacy" | "none" = "none";
-  // Captured for the riskChange summary in the response below — hoisted out
-  // of the `if (entity)` block since it's needed regardless of whether a
-  // correlation was found.
-  let correlationSummary: { entity: string; confidence: number; method: string } | null = null;
-  if (entity) {
-    const listings = await prisma.listing.findMany();
-    const inputs: ListingInput[] = listings.map((l) => ({
-      id: l.id,
-      category: l.category,
-      title: l.title,
-      priceUsd: l.priceUsd,
-      marketplace: l.marketplace,
-      vendorAlias: l.vendorAlias,
-      firstSeen: l.firstSeen,
-      lastSeen: l.lastSeen,
-      shipsFrom: l.shipsFrom,
-    }));
-
-    // Emit the richer, explainable correlation result (method +
-    // matchedSignals) when listing evidence exists for this alias;
-    // otherwise fall back to the entity's stored alias/confidence so the
-    // event still fires exactly as before. `entity` and `confidence`
-    // fields are always present for backward compatibility with any
-    // existing consumer of this event.
-    const correlationGroup = getCorrelationForAlias(entity.alias, correlateListings(inputs));
-    correlationSummary = {
-      entity: entity.alias,
-      confidence: correlationGroup?.confidence ?? entity.confidence,
-      method: correlationGroup?.method ?? "none",
-    };
-    emit("correlation", {
-      entity: entity.alias,
-      confidence: correlationGroup?.confidence ?? entity.confidence,
-      method: correlationGroup?.method ?? "none",
-      matchedSignals: correlationGroup?.matchedSignals ?? [],
-    });
-
-    const vendorRiskByAlias = computeVendorRisk(inputs);
-    const computed = computeEntityRisk(entity.alias, vendorRiskByAlias);
-    if (computed.risk !== null && computed.confidence !== null) {
-      deltaInput = { risk: computed.risk, confidence: computed.confidence };
-      deltaInputSource = "computed";
-    } else {
-      deltaInput = { risk: entity.risk, confidence: entity.confidence };
-      deltaInputSource = "legacy";
-    }
-  }
-  // else: no entity at all — preserved prior behavior of not emitting a
-  // correlation event and leaving deltaInputSource as "none".
-
-  const { delta: scoreDelta, explanation: deltaExplanation } = computeSimulateScoreDelta(deltaInput);
-  const newNetworkRisk = Math.min(100, network.risk + scoreDelta);
-  const status = riskToStatus(newNetworkRisk);
-
-  const riskEvent = await prisma.riskEvent.create({
-    data: {
-      entityId: entity ? entity.id : undefined,
-      type: chosen.type,
-      description: `${chosen.description} — ${deltaExplanation} (delta input: ${deltaInputSource})`,
-      scoreDelta,
-    },
+  // 3. Correlate -> risk -> alert -> wallet. All in intelligencePipeline.ts.
+  const result = await runIntelligencePipeline({
+    network,
+    entity,
+    triggerType: chosen.type,
+    triggerDescription: chosen.description,
+    ip: ipFromRequest(req),
   });
-
-  const updatedNetwork = await prisma.network.update({
-    where: { id: network.id },
-    data: {
-      risk: newNetworkRisk,
-      change: newNetworkRisk - network.risk,
-      status,
-      lastActivity: new Date(),
-    },
-  });
-
-  await prisma.networkRiskPoint.create({
-    data: { networkId: network.id, label: new Date().toISOString(), score: newNetworkRisk },
-  });
-
-  emit("risk_updated", { network: network.displayId, from: network.risk, to: newNetworkRisk });
 
   await logAudit({
     user: "System",
@@ -166,47 +80,12 @@ simulateRouter.post("/event", asyncHandler(async (req, res) => {
     ip: ipFromRequest(req),
   });
 
-  // 4. Threshold check -> alert generation (the "killer moment")
-  let alert = null;
-  if (network.risk < RISK_THRESHOLDS.CRITICAL && newNetworkRisk >= RISK_THRESHOLDS.CRITICAL) {
-    const count = await prisma.alert.count();
-    alert = await prisma.alert.create({
-      data: {
-        displayId: `ALT-${100 + count}`,
-        severity: newNetworkRisk,
-        title: `Network ${network.displayId} crossed critical risk threshold`,
-        reason: `Risk escalated to ${newNetworkRisk} following ${chosen.description.toLowerCase()} and entity correlation`,
-        status: "NEW",
-        networkId: network.id,
-        ...(entity ? { entities: { create: { entityId: entity.id } } } : {}),
-      },
-    });
-    emit("alert_generated", alert);
-    await logAudit({
-      user: "System",
-      action: "Alert Generated",
-      resource: alert.displayId,
-      type: "system",
-      ip: ipFromRequest(req),
-    });
-  }
-
-  // Explicit, non-derived risk-change summary — every field here is a value
-  // already computed/persisted above (network.risk captured before the
-  // update, newNetworkRisk/scoreDelta from the deterministic delta calc,
-  // chosen.description and correlationSummary from the real event/
-  // correlation that just ran). Nothing here is invented after the fact;
-  // it's the same numbers already written to riskEvent/updatedNetwork,
-  // just assembled into one place so the frontend doesn't have to
-  // back-calculate "previous risk" from `change`.
-  const riskChange = {
-    previousRisk: network.risk,
-    currentRisk: newNetworkRisk,
-    change: scoreDelta,
-    trigger: chosen.description,
-    correlation: correlationSummary,
-    alertGenerated: alert !== null,
-  };
-
-  res.status(201).json({ riskEvent, network: updatedNetwork, alert, deltaInputSource, riskChange });
+  res.status(201).json({
+    riskEvent: result.riskEvent,
+    network: result.network,
+    alert: result.alert,
+    deltaInputSource: result.deltaInputSource,
+    riskChange: result.riskChange,
+    wallet: result.wallet,
+  });
 }));
