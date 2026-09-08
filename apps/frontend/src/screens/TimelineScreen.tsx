@@ -73,7 +73,10 @@ export function TimelineScreen({ navigate, displayId }: { navigate:(s:string,d?:
       <h1 className="section-head" style={{marginBottom:22}}>Investigation Timeline</h1>
       {loading && <p className="page-sub" style={{marginBottom:14}}>Loading timeline…</p>}
       {error && <p className="page-sub" style={{marginBottom:14,color:"var(--high-light)"}}>Couldn't reach the API ({error}).</p>}
-      {!loading && !error && <TimelineView events={events}/>}
+      {!loading && !error && events.length === 0 && (
+        <p className="page-sub" style={{marginBottom:14}}>No timeline events recorded yet.</p>
+      )}
+      {!loading && !error && events.length > 0 && <TimelineView events={events}/>}
     </div>
   );
 }
