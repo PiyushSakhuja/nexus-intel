@@ -336,23 +336,222 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
                   </div>
                 )}
 
-                {sel.ocrSentiment.sentiment && (
-                  <div style={{ fontSize: 11.5, color: "var(--text-3)", marginBottom: 6 }}>
-                    Tone: <span style={{
-                      color: sel.ocrSentiment.sentiment.label === "negative" ? "var(--high-light)" :
-                             sel.ocrSentiment.sentiment.label === "positive" ? "var(--low-light)" : "var(--text-2)",
-                      fontWeight: 600,
-                    }}>{sel.ocrSentiment.sentiment.label}</span>
-                    {" "}(comparative {Number(sel.ocrSentiment.sentiment.comparative).toFixed(2)})
-                  </div>
-                )}
+{sel.ocrSentiment.sentiment && (
+  <div
+    style={{
+      marginTop: 10,
+      padding: 12,
+      border: "1px solid var(--border)",
+      borderRadius: 8,
+      background: "rgba(255,255,255,0.015)",
+    }}
+  >
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: 8,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          color: "var(--text-4)",
+          textTransform: "uppercase",
+          letterSpacing: "0.07em",
+        }}
+      >
+        AI Sentiment Analysis
+      </div>
+
+      <span
+        style={{
+          fontSize: 9,
+          padding: "3px 6px",
+          borderRadius: 4,
+          background:
+            sel.ocrSentiment.sentiment.source === "llm"
+              ? "rgba(99,102,241,0.12)"
+              : "rgba(217,119,6,0.12)",
+          color:
+            sel.ocrSentiment.sentiment.source === "llm"
+              ? "var(--accent-hi)"
+              : "var(--medium-light)",
+          border:
+            sel.ocrSentiment.sentiment.source === "llm"
+              ? "1px solid rgba(99,102,241,0.2)"
+              : "1px solid rgba(217,119,6,0.2)",
+        }}
+      >
+        {sel.ocrSentiment.sentiment.source === "llm"
+          ? "LLM ANALYZED"
+          : "FALLBACK"}
+      </span>
+    </div>
+
+    {/* Sentiment + confidence */}
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        marginBottom: 9,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 20,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          color:
+            sel.ocrSentiment.sentiment.label === "negative"
+              ? "var(--high-light)"
+              : sel.ocrSentiment.sentiment.label === "positive"
+                ? "var(--low-light)"
+                : "var(--text-2)",
+        }}
+      >
+        {sel.ocrSentiment.sentiment.label}
+      </div>
+
+      <div
+        style={{
+          fontSize: 11,
+          color: "var(--text-4)",
+        }}
+      >
+        {Math.round(
+          Number(sel.ocrSentiment.sentiment.confidence ?? 0) * 100
+        )}
+        % confidence
+      </div>
+    </div>
+
+    {/* Confidence bar */}
+    <div
+      style={{
+        height: 5,
+        background: "rgba(255,255,255,0.07)",
+        borderRadius: 4,
+        overflow: "hidden",
+        marginBottom: 10,
+      }}
+    >
+      <div
+        style={{
+          height: "100%",
+          width: `${Math.max(
+            0,
+            Math.min(
+              100,
+              Number(
+                sel.ocrSentiment.sentiment.confidence ?? 0
+              ) * 100
+            )
+          )}%`,
+          background:
+            sel.ocrSentiment.sentiment.label === "negative"
+              ? "var(--high-light)"
+              : sel.ocrSentiment.sentiment.label === "positive"
+                ? "var(--low-light)"
+                : "var(--text-3)",
+          borderRadius: 4,
+          transition: "width 0.3s ease",
+        }}
+      />
+    </div>
+
+    {/* Emotions */}
+    {Array.isArray(sel.ocrSentiment.sentiment.emotions) &&
+      sel.ocrSentiment.sentiment.emotions.length > 0 && (
+        <div style={{ marginBottom: 9 }}>
+          <div
+            style={{
+              fontSize: 10,
+              color: "var(--text-4)",
+              marginBottom: 5,
+            }}
+          >
+            Emotional Signals
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 5,
+            }}
+          >
+            {sel.ocrSentiment.sentiment.emotions.map(
+              (emotion: string, i: number) => (
+                <span
+                  key={`${emotion}-${i}`}
+                  className="mono-sm"
+                  style={{
+                    fontSize: 10,
+                    padding: "3px 7px",
+                    borderRadius: 4,
+                    background: "rgba(99,102,241,0.08)",
+                    border:
+                      "1px solid rgba(99,102,241,0.18)",
+                    color: "var(--accent-hi)",
+                    textTransform: "capitalize",
+                  }}
+                >
+                  {emotion}
+                </span>
+              )
+            )}
+          </div>
+        </div>
+      )}
+
+    {/* LLM reasoning */}
+    {sel.ocrSentiment.sentiment.reasoning && (
+      <div style={{ marginBottom: 8 }}>
+        <div
+          style={{
+            fontSize: 10,
+            color: "var(--text-4)",
+            marginBottom: 4,
+          }}
+        >
+          Sentiment Reasoning
+        </div>
+
+        <div
+          style={{
+            fontSize: 11.5,
+            color: "var(--text-2)",
+            lineHeight: 1.5,
+          }}
+        >
+          {sel.ocrSentiment.sentiment.reasoning}
+        </div>
+      </div>
+    )}
+
+    <div
+      style={{
+        fontSize: 9.5,
+        color: "var(--text-4)",
+        marginTop: 7,
+      }}
+    >
+      {sel.ocrSentiment.sentiment.source === "llm"
+        ? `Analyzed by ${sel.ocrSentiment.sentiment.modelUsed}`
+        : "LLM unavailable — sentiment was not reliably classified"}
+    </div>
+  </div>
+)}
 
                 {sel.ocrSentiment.explanation && (
                   <div style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.5 }}>{sel.ocrSentiment.explanation}</div>
                 )}
 
                 <div style={{ fontSize: 10, color: "var(--text-4)", marginTop: 6 }}>
-                  {sel.ocrSentiment.aiGenerated ? `Explanation by ${sel.ocrSentiment.modelUsed}` : "Templated explanation (LLM unavailable)"}
+                  {sel.ocrSentiment.aiGenerated ? `AI explanation by ${sel.ocrSentiment.modelUsed}` : "Fallback explanation — LLM unavailable"}
                 </div>
               </div>
             )}

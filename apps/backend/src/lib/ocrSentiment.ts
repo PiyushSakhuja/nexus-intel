@@ -1,44 +1,35 @@
 // src/lib/ocrSentiment.ts
 //
-// Analyzes EvidenceRecord.ocrText (text extracted from an uploaded image
-// by lib/ocr.ts) along two independent axes:
+// OCR evidence analysis:
 //
-//   1. Suspicion score — a deterministic, explainable keyword scorer, same
-//      "no faked numbers" convention as lib/riskEngine.ts's CONTENT_GROUPS:
-//      every point is traceable to a matched pattern, nothing here is an
-//      LLM guess. Reuses riskStatus.ts's shared 0-100 -> LOW/MEDIUM/HIGH/
-//      CRITICAL thresholds so a piece of OCR text is never labeled
-//      inconsistently with how the same number would read anywhere else
-//      in the product.
-//   2. Sentiment — general-purpose AFINN-based tone (positive/neutral/
-//      negative + comparative score) via the `sentiment` package. This is
-//      literal sentiment analysis, kept deliberately separate from the
-//      suspicion score: an OCR'd threat or a coerced message can score
-//      strongly negative in tone without containing any of the marketplace
-//      keyword groups below, and vice versa (a "pure, uncut" listing
-//      reads tonally neutral). Reporting both, rather than collapsing them
-//      into one number, is what lets an investigator see *why* something
-//      was flagged.
+// 1. Suspicion score:
+//    Deterministic, explainable keyword scoring.
+//    The LLM NEVER controls the suspicion score.
 //
-// Like investigationAssessment.ts, an optional LLM call (via llmClient.ts)
-// turns the deterministic signals into a plain-English explanation —
-// never the other way around, and it degrades to a deterministic
-// templated explanation if the model is unavailable/unconfigured, so this
-// never blocks evidence creation.
+// 2. Sentiment:
+//    LLM-based sentiment analysis using the existing llmClient.
+//    The LLM returns:
+//      - positive / neutral / negative
+//      - confidence
+//      - emotions
+//      - reasoning
+//
+// 3. Explanation:
+//    The same LLM call also produces an investigator-facing explanation.
+//
+// If the LLM is unavailable, the evidence is still saved and a clearly
+// marked fallback result is returned.
 
-import Sentiment from "sentiment";
-import { callLlmForJson, LlmError, SupportedModel, DEFAULT_MODEL } from "./llmClient.js";
+import {
+  callLlmForJson,
+  LlmError,
+  SupportedModel,
+  DEFAULT_MODEL,
+} from "./llmClient.js";
+
 import { riskToStatus, type RiskLevel } from "./riskStatus.js";
 
-const sentimentAnalyzer = new Sentiment();
-
 // ─── Suspicion keyword groups ───────────────────────────────────────────
-//
-// Six independent groups covering the categories that actually show up in
-// dark-web marketplace listings, chat screenshots, and photographed
-// documents — the kinds of images evidence gets attached to. Weights sum
-// to 100. Deliberately mirrors the shape of riskEngine.ts's CONTENT_GROUPS
-// (label, pattern, value) rather than inventing a different convention.
 
 export type SuspicionFactor =
   | "financialFraud"
@@ -61,71 +52,69 @@ export const SUSPICION_FACTOR_LABELS: Record<SuspicionFactor, string> = {
 
 export interface SuspicionSignal {
   label: string;
-  value: number; // points this signal contributed, out of 100
+  value: number;
   factor: SuspicionFactor;
 }
 
-const SUSPICION_GROUPS: { factor: SuspicionFactor; pattern: RegExp; value: number }[] = [
+const SUSPICION_GROUPS: {
+  factor: SuspicionFactor;
+  pattern: RegExp;
+  value: number;
+}[] = [
   {
     factor: "financialFraud",
-    pattern: /\b(cvv|fullz|dumps?|carding|paypal|western union|\bwu\b|bank ?log|swift|iban|\bbin\b|wire transfer|money mule|chargeback)\b/i,
+    pattern:
+      /\b(cvv|fullz|dumps?|carding|paypal|western union|\bwu\b|bank ?log|swift|iban|\bbin\b|wire transfer|money mule|chargeback)\b/i,
     value: 18,
   },
   {
     factor: "identityDocument",
-    pattern: /\b(passport|driver'?s?\s?licen[sc]e|id card|\bssn\b|social security|fake id|date of birth|\bdob\b)\b/i,
+    pattern:
+      /\b(passport|driver'?s?\s?licen[sc]e|id card|\bssn\b|social security|fake id|date of birth|\bdob\b)\b/i,
     value: 12,
   },
   {
     factor: "controlledSubstance",
-    // Added "controlled substance" as its own phrase — the generic legal term
-    // an investigator uses when the specific drug name isn't stated, distinct
-    // from (and additional to) the named-substance list already here.
-    pattern: /\b(pure|uncut|aaa\+*|fentanyl|carfentanil|heroin|cocaine|meth(?:amphetamine)?|\bmdma\b|\blsd\b|ketamine|oxycodone|xanax|controlled substances?)\b/i,
+    pattern:
+      /\b(pure|uncut|aaa\+*|fentanyl|carfentanil|heroin|cocaine|meth(?:amphetamine)?|\bmdma\b|\blsd\b|ketamine|oxycodone|xanax|controlled substances?)\b/i,
     value: 18,
   },
   {
     factor: "weapon",
-    pattern: /\b(glock|pistol|firearm|handgun|ammo(?:nition)?|silencer|suppressor|ghost gun|untraceable weapon|explosive device)\b/i,
+    pattern:
+      /\b(glock|pistol|firearm|handgun|ammo(?:nition)?|silencer|suppressor|ghost gun|untraceable weapon|explosive device)\b/i,
     value: 15,
   },
   {
     factor: "operationalSecurity",
-    // Added off-platform/account-hopping evasion language — moving a deal
-    // off the monitored platform or switching away from a "main" account is
-    // as much an evasion signal as the existing tor/vpn/monero terms.
-    pattern: /\b(burner phone|untraceable|no ?le\b|stealth (?:ship|packaging)|encrypted|\bpgp\b|monero|\bxmr\b|escrow|wipe metadata|\btor\b|\bvpn\b|cash only|no camera|off.?grid|off.?platform|main account|anonymous account|keep (?:this|it) (?:private|secret))\b/i,
+    pattern:
+      /\b(burner phone|untraceable|no ?le\b|stealth (?:ship|packaging)|encrypted|\bpgp\b|monero|\bxmr\b|escrow|wipe metadata|\btor\b|\bvpn\b|cash only|no camera|off.?grid|off.?platform|main account|anonymous account|keep (?:this|it) (?:private|secret))\b/i,
     value: 12,
   },
   {
     factor: "urgencyPressure",
-    // Added a bare "urgent" match — the original phrasing required "this
-    // (is) urgent", which misses a standalone "URGENT" header/label or
-    // "urgent response requested", both common in flagged chat excerpts.
-    pattern: /\b(act now|limited time|don'?t tell anyone|keep this (?:secret|between us)|verify payment now|wire (?:it |the money )?immediately|final warning|last chance|this (?:is )?urgent|urgent(?:ly)?\b.{0,20}\b(response|reply|action)|^urgent\b)\b/i,
+    pattern:
+      /\b(act now|limited time|don'?t tell anyone|keep this (?:secret|between us)|verify payment now|wire (?:it |the money )?immediately|final warning|last chance|this (?:is )?urgent|urgent(?:ly)?\b.{0,20}\b(response|reply|action)|^urgent\b)\b/i,
     value: 10,
   },
   {
     factor: "transactionCoordination",
-    // New group: previous groups only caught vocabulary (drug names, fraud
-    // terms, evasion tools), not the shape of an actual deal in progress —
-    // "buyer confirmed", "payment sent", "package ready", "awaiting
-    // confirmation" are exactly the concrete completed/pending-transaction
-    // evidence an investigator weighs most heavily, and nothing above was
-    // built to catch it.
-    pattern: /\b(payment (?:has been |was )?sent|payment confirm(?:ed|ation)|buyer (?:has )?confirmed|awaiting confirmation|package (?:is )?ready|transaction (?:is )?(?:pending|awaiting|complete|confirmed))\b/i,
+    pattern:
+      /\b(payment (?:has been |was )?sent|payment confirm(?:ed|ation)|buyer (?:has )?confirmed|awaiting confirmation|package (?:is )?ready|transaction (?:is )?(?:pending|awaiting|complete|confirmed))\b/i,
     value: 15,
   },
 ];
 
 /**
- * Deterministic, explainable scorer — pure function of the OCR text. Same
- * input always produces the same signals; no randomness, no LLM
- * involvement. Only signals with a match are returned (riskEngine.ts
- * convention: skip what wasn't found rather than listing zero-value rows).
+ * Deterministic suspicion scorer.
+ *
+ * The LLM has NO influence over this score.
  */
-export function computeSuspicionSignals(ocrText: string): SuspicionSignal[] {
+export function computeSuspicionSignals(
+  ocrText: string
+): SuspicionSignal[] {
   const signals: SuspicionSignal[] = [];
+
   for (const group of SUSPICION_GROUPS) {
     if (group.pattern.test(ocrText)) {
       signals.push({
@@ -135,113 +124,314 @@ export function computeSuspicionSignals(ocrText: string): SuspicionSignal[] {
       });
     }
   }
+
   return signals;
 }
 
-export interface SentimentSummary {
-  score: number; // raw AFINN score
-  comparative: number; // score normalized by token count
-  label: "positive" | "neutral" | "negative";
-  positiveWords: string[];
-  negativeWords: string[];
-}
+// ─── LLM Sentiment ──────────────────────────────────────────────────────
 
-/** General-purpose tone analysis — deliberately separate from suspicion (see header). */
-export function analyzeSentiment(ocrText: string): SentimentSummary {
-  const result = sentimentAnalyzer.analyze(ocrText);
-  const label: SentimentSummary["label"] =
-    result.comparative > 0.05 ? "positive" : result.comparative < -0.05 ? "negative" : "neutral";
-  return {
-    score: result.score,
-    comparative: result.comparative,
-    label,
-    positiveWords: result.positive,
-    negativeWords: result.negative,
-  };
+export type SentimentLabel = "positive" | "neutral" | "negative";
+
+export interface SentimentSummary {
+  label: SentimentLabel;
+
+  /**
+   * LLM confidence from 0 to 1.
+   */
+  confidence: number;
+
+  /**
+   * Up to three emotional signals identified by the LLM.
+   */
+  emotions: string[];
+
+  /**
+   * Short linguistic explanation produced by the LLM.
+   */
+  reasoning: string;
+
+  /**
+   * Always "llm" for a successful LLM analysis,
+   * "fallback" when the model could not be reached.
+   */
+  source: "llm" | "fallback";
+
+  /**
+   * Model used for sentiment analysis.
+   */
+  modelUsed: string;
 }
 
 export interface OcrTextAnalysis {
-  suspicious: boolean; // score >= riskStatus.ts's MEDIUM threshold
-  suspicionScore: number; // 0-100, sum of matched signal values (capped at 100)
+  suspicious: boolean;
+  suspicionScore: number;
   suspicionLevel: RiskLevel;
   signals: SuspicionSignal[];
+
+  /**
+   * LLM-based sentiment result.
+   */
   sentiment: SentimentSummary;
+
+  /**
+   * Investigator-facing explanation.
+   */
   explanation: string;
-  aiGenerated: boolean; // false when the LLM failed/was unconfigured and a fallback template was used
-  modelUsed: string; // which model produced `explanation`, or "fallback"
+
+  /**
+   * Whether the explanation was generated by the LLM.
+   */
+  aiGenerated: boolean;
+
+  /**
+   * Model used for the explanation.
+   */
+  modelUsed: string;
 }
 
-function templatedExplanation(signals: SuspicionSignal[], sentiment: SentimentSummary, level: RiskLevel): string {
-  if (signals.length === 0) {
-    return `No suspicion indicators matched in the extracted text. Overall tone reads ${sentiment.label} (comparative ${sentiment.comparative.toFixed(2)}).`;
+interface LlmAnalysisResponse {
+  sentiment?: {
+    label?: string;
+    confidence?: number;
+    emotions?: string[];
+    reasoning?: string;
+  };
+  explanation?: string;
+}
+
+// ─── Validation helpers ─────────────────────────────────────────────────
+
+function normalizeSentimentLabel(value: unknown): SentimentLabel | null {
+  if (typeof value !== "string") return null;
+
+  const normalized = value.toLowerCase().trim();
+
+  if (
+    normalized === "positive" ||
+    normalized === "neutral" ||
+    normalized === "negative"
+  ) {
+    return normalized;
   }
-  const factorList = signals.map((s) => s.label.toLowerCase()).join(", ");
-  return `Extracted text matched ${signals.length} indicator group${signals.length === 1 ? "" : "s"} (${factorList}), putting the suspicion level at ${level}. Overall tone reads ${sentiment.label} (comparative ${sentiment.comparative.toFixed(2)}).`;
+
+  return null;
 }
 
-interface LlmExplanationResponse {
-  explanation: string;
+function normalizeConfidence(value: unknown): number {
+  const numberValue =
+    typeof value === "number" ? value : Number(value);
+
+  if (!Number.isFinite(numberValue)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(1, numberValue));
 }
+
+function normalizeEmotions(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter((emotion): emotion is string => typeof emotion === "string")
+    .map((emotion) => emotion.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+// ─── Fallback ───────────────────────────────────────────────────────────
+
+function fallbackSentiment(): SentimentSummary {
+  return {
+    label: "neutral",
+    confidence: 0,
+    emotions: [],
+    reasoning:
+      "LLM sentiment analysis was unavailable, so no reliable sentiment classification was produced.",
+    source: "fallback",
+    modelUsed: "fallback",
+  };
+}
+
+function templatedExplanation(
+  signals: SuspicionSignal[],
+  sentiment: SentimentSummary,
+  level: RiskLevel
+): string {
+  if (signals.length === 0) {
+    return `No deterministic suspicion indicators matched in the extracted text. LLM sentiment analysis was unavailable.`;
+  }
+
+  const factorList = signals
+    .map((s) => s.label.toLowerCase())
+    .join(", ");
+
+  return (
+    `Extracted text matched ${signals.length} indicator group${
+      signals.length === 1 ? "" : "s"
+    } (${factorList}), putting the suspicion level at ${level}. ` +
+    `LLM sentiment analysis was unavailable.`
+  );
+}
+
+// ─── Main analysis pipeline ─────────────────────────────────────────────
 
 /**
- * Full pipeline for one piece of OCR text: deterministic suspicion score +
- * sentiment, then an optional LLM pass that turns those into a
- * plain-English explanation. The score/level themselves are NEVER derived
- * from the LLM — only the explanation text is, and even that falls back
- * to a deterministic template on any LLM failure so this never blocks
- * evidence creation (same contract as ocr.ts and investigationAssessment.ts).
+ * Full OCR analysis:
+ *
+ *   OCR text
+ *      ↓
+ *   deterministic suspicion scoring
+ *      ↓
+ *   LLM sentiment + explanation
+ *
+ * IMPORTANT:
+ * The LLM does NOT determine suspicionScore or suspicionLevel.
  */
-export async function analyzeOcrText(ocrText: string, model: SupportedModel = DEFAULT_MODEL): Promise<OcrTextAnalysis> {
-  const signals = computeSuspicionSignals(ocrText);
-  const suspicionScore = Math.min(100, signals.reduce((sum, s) => sum + s.value, 0));
-  const suspicionLevel = riskToStatus(suspicionScore);
-  const suspicious = suspicionLevel === "MEDIUM" || suspicionLevel === "HIGH" || suspicionLevel === "CRITICAL";
-  const sentiment = analyzeSentiment(ocrText);
+export async function analyzeOcrText(
+  ocrText: string,
+  model: SupportedModel = DEFAULT_MODEL
+): Promise<OcrTextAnalysis> {
+  const cleanText = ocrText.trim();
 
+  // 1. Deterministic suspicion analysis
+  const signals = computeSuspicionSignals(cleanText);
+
+  const suspicionScore = Math.min(
+    100,
+    signals.reduce((sum, signal) => sum + signal.value, 0)
+  );
+
+  const suspicionLevel = riskToStatus(suspicionScore);
+
+  const suspicious =
+    suspicionLevel === "MEDIUM" ||
+    suspicionLevel === "HIGH" ||
+    suspicionLevel === "CRITICAL";
+
+  // 2. LLM sentiment + explanation
   try {
     const prompt = [
-      `OCR-extracted text from a piece of uploaded evidence:`,
-      `"""${ocrText.slice(0, 2000)}"""`,
-      ``,
-      `Deterministic suspicion signals already computed (do not change these numbers, only explain them):`,
-      signals.length > 0
-        ? signals.map((s) => `- ${s.label}: +${s.value}`).join("\n")
-        : "- (none matched)",
-      `Suspicion score: ${suspicionScore}/100 (${suspicionLevel})`,
-      `Sentiment: ${sentiment.label} (comparative ${sentiment.comparative.toFixed(2)})`,
-      ``,
-      `Write a 1-2 sentence, investigator-facing explanation of why this text was flagged at this level. Do not invent new signals or repeat the raw text verbatim.`,
+      "Analyze the emotional sentiment and tone of the following OCR-extracted evidence text.",
+      "",
+      "Classify the overall sentiment as exactly one of:",
+      "- positive",
+      "- neutral",
+      "- negative",
+      "",
+      "Also provide:",
+      "1. confidence: a number from 0 to 1",
+      "2. emotions: up to 3 relevant emotions",
+      "3. reasoning: a short explanation of the linguistic/emotional tone",
+      "4. explanation: a short investigator-facing explanation",
+      "",
+      "IMPORTANT:",
+      "- Analyze sentiment and emotional tone only.",
+      "- Do not decide whether the text is criminal or illegal.",
+      "- Do not invent facts.",
+      "- Do not change or reinterpret the deterministic suspicion score.",
+      "- Do not treat suspicious terminology automatically as negative sentiment.",
+      "- Return ONLY valid JSON.",
+      "",
+      "Expected JSON structure:",
+      JSON.stringify(
+        {
+          sentiment: {
+            label: "negative",
+            confidence: 0.94,
+            emotions: ["fear", "urgency"],
+            reasoning:
+              "The text uses urgent and threatening language that creates a strongly negative emotional tone.",
+          },
+          explanation:
+            "The extracted text contains language associated with urgency and pressure, resulting in a negative emotional tone.",
+        },
+        null,
+        2
+      ),
+      "",
+      `Deterministic suspicion score: ${suspicionScore}/100`,
+      `Deterministic suspicion level: ${suspicionLevel}`,
+      "",
+      "OCR TEXT:",
+      `"""${cleanText.slice(0, 6000)}"""`,
     ].join("\n");
 
-    const parsed = await callLlmForJson<LlmExplanationResponse>({
+    const parsed = await callLlmForJson<LlmAnalysisResponse>({
       model,
       prompt,
       systemInstruction:
-        'You are assisting a dark-web intelligence analyst. Respond ONLY with JSON of the shape {"explanation": string}.',
+        "You are an AI sentiment-analysis component inside a digital evidence intelligence platform. Analyze linguistic tone objectively. Return only JSON.",
     });
 
-    if (parsed?.explanation) {
-      return {
-        suspicious,
-        suspicionScore,
-        suspicionLevel,
-        signals,
-        sentiment,
-        explanation: parsed.explanation,
-        aiGenerated: true,
-        modelUsed: model,
-      };
+    const label = normalizeSentimentLabel(
+      parsed?.sentiment?.label
+    );
+
+    if (!label) {
+      throw new LlmError(
+        "LLM returned an invalid sentiment label"
+      );
     }
-    throw new LlmError("LLM returned no explanation field");
+
+    const confidence = normalizeConfidence(
+      parsed?.sentiment?.confidence
+    );
+
+    const emotions = normalizeEmotions(
+      parsed?.sentiment?.emotions
+    );
+
+    const reasoning =
+      typeof parsed?.sentiment?.reasoning === "string" &&
+      parsed.sentiment.reasoning.trim()
+        ? parsed.sentiment.reasoning.trim()
+        : "The LLM did not provide a sentiment reasoning.";
+
+    const explanation =
+      typeof parsed?.explanation === "string" &&
+      parsed.explanation.trim()
+        ? parsed.explanation.trim()
+        : reasoning;
+
+    return {
+      suspicious,
+      suspicionScore,
+      suspicionLevel,
+      signals,
+
+      sentiment: {
+        label,
+        confidence,
+        emotions,
+        reasoning,
+        source: "llm",
+        modelUsed: model,
+      },
+
+      explanation,
+
+      aiGenerated: true,
+      modelUsed: model,
+    };
   } catch (err) {
-    console.error("[ocrSentiment] LLM explanation failed, using fallback template:", err instanceof Error ? err.message : err);
+    console.error(
+      "[ocrSentiment] LLM analysis failed:",
+      err instanceof Error ? err.message : err
+    );
+
+    const sentiment = fallbackSentiment();
+
     return {
       suspicious,
       suspicionScore,
       suspicionLevel,
       signals,
       sentiment,
-      explanation: templatedExplanation(signals, sentiment, suspicionLevel),
+      explanation: templatedExplanation(
+        signals,
+        sentiment,
+        suspicionLevel
+      ),
       aiGenerated: false,
       modelUsed: "fallback",
     };
