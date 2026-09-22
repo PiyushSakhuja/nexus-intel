@@ -41,8 +41,9 @@ const FRONTEND_URL =
 
 const app = express();
 
-app.use(cors({ origin: FRONTEND_URL }));
+app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 app.use(express.json());
+app.use(cookieParser());
 
 app.get("/api/health", (_req, res) =>
   res.json({
@@ -60,12 +61,24 @@ app.use("/api/auth", authRouter);
 // called by a producer script, not a logged-in investigator, so it's
 // intentionally NOT behind requireAuth/session cookies. ─────────────────
 app.use("/api/ingest", ingestRouter);
-app.use("/api/evidence", evidenceRouter);
-app.use("/api/wallets", walletsRouter);
-app.use("/api/listings", listingsRouter);
-app.use("/api/vendors", vendorsRouter);
-app.use("/api/audit-log", auditRouter);
-app.use("/api/sources", sourcesRouter);
+
+app.use("/api/evidence", requireAuth, evidenceRouter);
+app.use("/api/wallets", requireAuth, walletsRouter);
+app.use("/api/listings", requireAuth, listingsRouter);
+app.use("/api/vendors", requireAuth, vendorsRouter);
+app.use("/api/audit-log", requireAuth, requireRole("ADMINISTRATOR"), auditRouter);
+app.use("/api/sources", requireAuth, requireRole("ADMINISTRATOR"), sourcesRouter);
+
+app.use("/api/users", requireAuth, requireRole("ADMINISTRATOR"), usersRouter);
+
+app.use("/api/entities", requireAuth, entitiesRouter);
+app.use("/api/alerts", requireAuth, alertsRouter);
+app.use("/api/networks", requireAuth, networksRouter);
+app.use("/api/investigations", requireAuth, investigationsRouter);
+app.use("/api/graph", requireAuth, graphRouter);
+app.use("/api/reports", requireAuth, reportsRouter);
+app.use("/api/simulate", requireAuth, simulateRouter);
+app.use("/api/scrape", requireAuth, scrapeRouter);
 
 app.use("/api/dashboard", requireAuth, dashboardRouter);
 app.use("/api/analytics", requireAuth, analyticsRouter);

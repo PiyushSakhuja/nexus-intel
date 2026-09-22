@@ -18,8 +18,16 @@ import * as cheerio from "cheerio";
 import dns from "node:dns/promises";
 import net from "node:net";
 import { asyncHandler } from "../lib/asyncHandler.js";
+import { extractTextFromImageUrl } from "../lib/ocr.js";
+import { analyzeOcrText, type OcrTextAnalysis } from "../lib/ocrSentiment.js";
+import { DEFAULT_MODEL, type SupportedModel } from "../lib/llmClient.js";
 
 export const scrapeRouter = Router();
+
+// Max number of images we run OCR + sentiment on per scrape. OCR is the
+// slow step (Tesseract WASM), so this is capped hard to keep a hackathon
+// demo responsive — raise it if you have time budget to spare.
+const MAX_IMAGE_ANALYSIS = 5;
 
 interface ScrapeResult {
   url: string;
@@ -30,9 +38,11 @@ interface ScrapeResult {
   paragraphs: string[];
   links: { text: string; href: string }[];
   tables: { headers: string[]; rows: string[][] }[];
-  images: { alt: string; src: string }[];
+  images: { alt: string; src: string; ocrText?: string; sentiment?: OcrTextAnalysis | null }[];
   wordCount: number;
   rawTextPreview: string;
+  /** LLM sentiment analysis of the page's own text content. */
+  textSentiment: OcrTextAnalysis | null;
 }
 
 // ── SSRF guard ──────────────────────────────────────────────────────────
@@ -69,7 +79,8 @@ async function assertPublicHost(hostname: string): Promise<void> {
 scrapeRouter.post(
   "/",
   asyncHandler(async (req, res) => {
-    const { url } = req.body as { url?: string };
+    const { url, model } = req.body as { url?: string; model?: SupportedModel };
+    const llmModel: SupportedModel = model ?? DEFAULT_MODEL;
 
     if (!url || !url.trim()) {
       return res.status(400).json({ error: "url is required" });
@@ -229,7 +240,7 @@ scrapeRouter.post(
     });
 
     // ── Images ────────────────────────────────────────────────────────
-    const images: { alt: string; src: string }[] = [];
+    const images: { alt: string; src: string; ocrText?: string; sentiment?: OcrTextAnalysis | null }[] = [];
     $("img[src]").each((_, el) => {
       if (images.length >= 30) return;
       const rawSrc = $(el).attr("src") ?? "";
@@ -247,6 +258,33 @@ scrapeRouter.post(
     const wordCount = bodyText.split(/\s+/).filter(Boolean).length;
     const rawTextPreview = bodyText.slice(0, 1000);
 
+    // ── Sentiment analysis: page text ───────────────────────────────
+    // Reuses the same deterministic-suspicion + LLM-sentiment pipeline
+    // already used for uploaded evidence (lib/ocrSentiment.ts), applied
+    // here to the scraped page's own paragraph text instead of OCR text.
+    const combinedText = paragraphs.join("\n\n").slice(0, 6000);
+    const textSentiment = combinedText.trim()
+      ? await analyzeOcrText(combinedText, llmModel)
+      : null;
+
+    // ── Sentiment analysis: images (OCR text -> sentiment) ──────────
+    // For the first MAX_IMAGE_ANALYSIS images, fetch the image, OCR it,
+    // and if any text was found, run it through the same LLM sentiment
+    // pipeline. Runs in parallel; each image fails independently so one
+    // bad/slow image never blocks the rest.
+    await Promise.all(
+      images.slice(0, MAX_IMAGE_ANALYSIS).map(async (img) => {
+        try {
+          const ocrResult = await extractTextFromImageUrl(img.src);
+          if (!ocrResult?.text) return;
+          img.ocrText = ocrResult.text;
+          img.sentiment = await analyzeOcrText(ocrResult.text, llmModel);
+        } catch (err) {
+          console.error(`[scrape] image analysis failed for ${img.src}:`, err instanceof Error ? err.message : err);
+        }
+      })
+    );
+
     const result: ScrapeResult = {
       url: targetUrl.toString(),
       fetchedAt: new Date().toISOString(),
@@ -259,6 +297,7 @@ scrapeRouter.post(
       images,
       wordCount,
       rawTextPreview,
+      textSentiment,
     };
 
     res.json(result);

@@ -5,8 +5,7 @@
 // images) from the backend POST /api/scrape endpoint.
 
 import { useState } from "react";
-
-const API = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+import { apiPost } from "../lib/api";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 interface ScrapeResult {
@@ -76,20 +75,8 @@ export function ScraperScreen() {
     setResult(null);
 
     try {
-      const res = await fetch(`${API}/api/scrape`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trimmed }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error ?? `HTTP ${res.status}`);
-        return;
-      }
-
-      setResult(data as ScrapeResult);
+      const data = await apiPost<ScrapeResult>("/api/scrape", { url: trimmed });
+      setResult(data);
       setTab("overview");
     } catch (err: any) {
       setError(err?.message ?? "Network error — is the backend running?");
