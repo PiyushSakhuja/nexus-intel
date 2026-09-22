@@ -1,47 +1,69 @@
 // src/lib/imageMetadata.ts
 //
-// Downloads one image and extracts/flags its EXIF metadata. This is a
-// genuinely strong signal for marketplace-fraud work — unlike page text,
-// which a bad actor can freely write to sound legitimate, EXIF is a
-// byproduct of how the photo was actually produced, so it's harder to
-// fake convincingly:
-//   - Missing EXIF entirely: legitimate small sellers usually don't
-//     bother stripping it; its total absence is itself a (weak) signal
-//     that someone deliberately scrubbed it.
-//   - Editing-software tag present (Photoshop, GIMP, etc.): common when
-//     watermarks/backgrounds are being removed or a photo is being reused.
-//   - GPS coordinates present: informational — can corroborate or
-//     contradict a claimed "ships from" location elsewhere on the page.
+// Extracts EXIF/image metadata from the exact image bytes submitted as
+// evidence.
 //
-// None of these flags are proof of anything on their own — they're
-// signals to weigh alongside the page-level text score, same caveat as
-// every risk signal elsewhere in this codebase.
+// The evidence route already decodes imageBase64 into a Buffer. This module
+// accepts that Buffer so that:
+//   1. SHA-256 hashing
+//   2. OCR
+//   3. EXIF metadata analysis
+//
+// all operate on the same submitted image bytes.
+//
+// Metadata is a signal, NOT proof of fraud:
+//   - Missing EXIF can indicate metadata stripping, but many legitimate
+//     images (screenshots, PNGs, social-media downloads, etc.) have no EXIF.
+//   - Editing software can indicate image manipulation or reuse.
+//   - GPS data can corroborate or contradict a claimed location.
+//
+// This module never throws for normal EXIF parsing failures. It returns a
+// structured result instead.
 
 import exifr from "exifr";
 
-const MAX_IMAGE_BYTES = 15 * 1024 * 1024; // 15MB safety cap
-const FETCH_TIMEOUT_MS = 8000;
+const MAX_IMAGE_BYTES = 15 * 1024 * 1024; // 15 MB
+
+const EDITING_SOFTWARE_PATTERN =
+  /(photoshop|gimp|paint\.net|lightroom|affinity photo|canva)/i;
 
 export interface ImageMetadataResult {
+  /**
+   * Kept for compatibility with the database/frontend shape.
+   * For uploaded evidence this is "uploaded-image".
+   */
   imageUrl: string;
+
   width: number | null;
   height: number | null;
+
   cameraMake: string | null;
   cameraModel: string | null;
+
   software: string | null;
+
   gpsLat: number | null;
   gpsLon: number | null;
-  capturedAt: Date | null;
+
+  /**
+   * String rather than Date because this object is stored in Prisma's
+   * JSON field. JSON cannot directly contain a JavaScript Date object.
+   */
+  capturedAt: string | null;
+
   metadataStripped: boolean;
+
   suspicionFlags: string[];
+
   error?: string;
 }
 
-const EDITING_SOFTWARE_PATTERN = /(photoshop|gimp|paint\.net|lightroom|affinity photo|canva)/i;
-
-export async function analyzeImage(imageUrl: string): Promise<ImageMetadataResult> {
-  const base: ImageMetadataResult = {
-    imageUrl,
+/**
+ * Empty/default result used whenever the image cannot be analysed.
+ */
+function emptyResult(error?: string): ImageMetadataResult {
+  return {
+    imageUrl: "uploaded-image",
     width: null,
     height: null,
     cameraMake: null,
@@ -51,69 +73,162 @@ export async function analyzeImage(imageUrl: string): Promise<ImageMetadataResul
     gpsLon: null,
     capturedAt: null,
     metadataStripped: true,
-    suspicionFlags: [],
+    suspicionFlags: error
+      ? ["metadata_stripped"]
+      : [],
+    ...(error ? { error } : {}),
   };
+}
 
-  let buffer: ArrayBuffer;
+/**
+ * Parse EXIF directly from image bytes.
+ *
+ * This is deliberately separate from the public function so both
+ * URL-based and Buffer-based callers could share the same implementation
+ * without duplicating EXIF logic.
+ */
+async function parseExif(
+  imageBuffer: Buffer,
+  imageUrl = "uploaded-image"
+): Promise<ImageMetadataResult> {
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    const res = await fetch(imageUrl, { signal: controller.signal });
-    clearTimeout(timeout);
-    if (!res.ok) return { ...base, error: `Fetch failed: HTTP ${res.status}` };
-
-    const contentLength = Number(res.headers.get("content-length") ?? 0);
-    if (contentLength && contentLength > MAX_IMAGE_BYTES) {
-      return { ...base, error: `Image too large (${contentLength} bytes) — skipped` };
-    }
-    buffer = await res.arrayBuffer();
-    if (buffer.byteLength > MAX_IMAGE_BYTES) {
-      return { ...base, error: `Image too large (${buffer.byteLength} bytes) — skipped` };
-    }
-  } catch (err: any) {
-    return { ...base, error: `Fetch error: ${err.message ?? String(err)}` };
-  }
-
-  try {
-    const data = await exifr.parse(Buffer.from(buffer), {
-      pick: ["Make", "Model", "Software", "GPSLatitude", "GPSLongitude", "DateTimeOriginal", "ExifImageWidth", "ExifImageHeight"],
+    const data = await exifr.parse(imageBuffer, {
+      pick: [
+        "Make",
+        "Model",
+        "Software",
+        "GPSLatitude",
+        "GPSLongitude",
+        "DateTimeOriginal",
+        "ExifImageWidth",
+        "ExifImageHeight",
+        "ImageWidth",
+        "ImageHeight",
+      ],
     });
 
-    const hasAnyExif = !!data && Object.keys(data).length > 0;
+    const hasAnyExif =
+      !!data &&
+      typeof data === "object" &&
+      Object.keys(data).length > 0;
+
     const flags: string[] = [];
 
     if (!hasAnyExif) {
       flags.push("metadata_stripped");
     } else {
-      if (data.Software && EDITING_SOFTWARE_PATTERN.test(String(data.Software))) {
+      if (
+        data.Software &&
+        EDITING_SOFTWARE_PATTERN.test(String(data.Software))
+      ) {
         flags.push("editing_software_detected");
       }
-      if (typeof data.GPSLatitude === "number" && typeof data.GPSLongitude === "number") {
+
+      if (
+        typeof data.GPSLatitude === "number" &&
+        typeof data.GPSLongitude === "number"
+      ) {
         flags.push("gps_present");
       }
+
       if (!data.Make && !data.Model) {
-        flags.push("no_device_info"); // has SOME exif, but camera/device fields absent — partial scrub
+        flags.push("no_device_info");
+      }
+    }
+
+    let capturedAt: string | null = null;
+
+    if (data?.DateTimeOriginal) {
+      const date = new Date(data.DateTimeOriginal);
+
+      if (!Number.isNaN(date.getTime())) {
+        capturedAt = date.toISOString();
       }
     }
 
     return {
       imageUrl,
-      width: data?.ExifImageWidth ?? null,
-      height: data?.ExifImageHeight ?? null,
-      cameraMake: data?.Make ?? null,
-      cameraModel: data?.Model ?? null,
-      software: data?.Software ?? null,
-      gpsLat: typeof data?.GPSLatitude === "number" ? data.GPSLatitude : null,
-      gpsLon: typeof data?.GPSLongitude === "number" ? data.GPSLongitude : null,
-      capturedAt: data?.DateTimeOriginal ? new Date(data.DateTimeOriginal) : null,
+
+      width:
+        typeof data?.ExifImageWidth === "number"
+          ? data.ExifImageWidth
+          : typeof data?.ImageWidth === "number"
+            ? data.ImageWidth
+            : null,
+
+      height:
+        typeof data?.ExifImageHeight === "number"
+          ? data.ExifImageHeight
+          : typeof data?.ImageHeight === "number"
+            ? data.ImageHeight
+            : null,
+
+      cameraMake:
+        data?.Make != null
+          ? String(data.Make)
+          : null,
+
+      cameraModel:
+        data?.Model != null
+          ? String(data.Model)
+          : null,
+
+      software:
+        data?.Software != null
+          ? String(data.Software)
+          : null,
+
+      gpsLat:
+        typeof data?.GPSLatitude === "number"
+          ? data.GPSLatitude
+          : null,
+
+      gpsLon:
+        typeof data?.GPSLongitude === "number"
+          ? data.GPSLongitude
+          : null,
+
+      capturedAt,
+
       metadataStripped: !hasAnyExif,
+
       suspicionFlags: flags,
     };
-  } catch (err: any) {
-    // Parse failure (not a valid/parseable image, or a format with no
-    // EXIF container e.g. PNG/WebP) — this is different from a network
-    // error, but for our purposes it means the same thing: no usable
-    // metadata to inspect.
-    return { ...base, metadataStripped: true, suspicionFlags: ["metadata_stripped"], error: `EXIF parse error: ${err.message ?? String(err)}` };
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error
+        ? err.message
+        : String(err);
+
+    return {
+      ...emptyResult(`EXIF parse error: ${message}`),
+      imageUrl,
+    };
   }
+}
+
+/**
+ * Main function used by the evidence route.
+ *
+ * The evidence route passes the already-decoded image Buffer here.
+ * This means EXIF analysis is performed on the exact same bytes that
+ * were hashed for chain-of-custody and passed to OCR.
+ */
+export async function extractImageMetadata(
+  imageBuffer: Buffer
+): Promise<ImageMetadataResult> {
+  if (!imageBuffer || imageBuffer.length === 0) {
+    return emptyResult("Empty image buffer");
+  }
+
+  if (imageBuffer.length > MAX_IMAGE_BYTES) {
+    return emptyResult(
+      `Image too large (${imageBuffer.length} bytes) — skipped`
+    );
+  }
+
+  return parseExif(
+    imageBuffer,
+    "uploaded-image"
+  );
 }

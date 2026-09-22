@@ -1,7 +1,13 @@
 import { useState, useEffect } from "react";
 import { riskBg } from "../data";
 import { PulseIndicator } from "../components/shared";
-import { apiGet } from "../lib/api";
+import { apiGet, apiPost, apiPatch } from "../lib/api";
+
+const ROLE_LABEL: Record<string,string> = {
+  ADMINISTRATOR: "Administrator",
+  INVESTIGATOR: "Investigator",
+  ANALYST: "Analyst",
+};
 
 export function AdminScreen() {
   const roles = ["Administrator","Investigator","Analyst"];
@@ -12,20 +18,76 @@ export function AdminScreen() {
     Analyst:[true,true,false,true,false,false],
   };
 
-  // NOTE: there is no authentication/session system in this app yet (see
-  // backend route comments) — the User model exists in the schema but no
-  // route reads/writes it, and no route tracks online/idle/offline status.
-  // Rather than invent activity data that doesn't exist, the roster below
-  // is shown as a static illustration of the intended role structure, not
-  // live presence data. It's not pulled from data.ts and not claimed as
-  // real-time — see MOCK_DATA_AUDIT.md.
-  const users = [
-    {name:"Administrator",role:"Admin"},
-    {name:"Investigator A",role:"Investigator"},
-    {name:"Investigator B",role:"Investigator"},
-    {name:"Investigator C",role:"Investigator"},
-    {name:"Analyst D",role:"Analyst"},
-  ];
+  const [users, setUsers] = useState<any[]>([]);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [usersError, setUsersError] = useState<string|null>(null);
+
+  const [showAddUser, setShowAddUser] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newRole, setNewRole] = useState("INVESTIGATOR");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string|null>(null);
+
+  const [justCreated, setJustCreated] = useState<{email:string; tempPassword:string; action:"created"|"reset"}|null>(null);
+  const [resettingId, setResettingId] = useState<string|null>(null);
+
+  const loadUsers = () => {
+    setUsersLoading(true);
+    apiGet<any[]>("/api/users")
+      .then(data => { setUsers(data); setUsersError(null); })
+      .catch(err => setUsersError(err.message))
+      .finally(() => setUsersLoading(false));
+  };
+
+  useEffect(() => { loadUsers(); }, []);
+
+  const submitNewUser = async () => {
+    if (!newName.trim() || !newEmail.trim()) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const { user, tempPassword } = await apiPost<{user:any; tempPassword:string}>("/api/users", {
+        name: newName.trim(), email: newEmail.trim(), role: newRole,
+      });
+      setJustCreated({ email: user.email, tempPassword, action: "created" });
+      setNewName(""); setNewEmail(""); setNewRole("INVESTIGATOR");
+      setShowAddUser(false);
+      loadUsers();
+    } catch (err: any) {
+      setCreateError(err.message ?? "Failed to create user.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const changeRole = async (id: string, role: string) => {
+    try {
+      await apiPatch(`/api/users/${id}/role`, { role });
+      loadUsers();
+    } catch {
+      // loadUsers() below on next render will reflect actual server state
+      // either way; a silent failure here just means the optimistic UI
+      // change didn't happen, not that anything's in a bad state.
+    }
+  };
+
+  // Admin-initiated reset — for a forgotten/locked-out account, as opposed
+  // to the self-service change a logged-in user does themselves (see the
+  // "Change Password" option under the account menu in Layout.tsx). Same
+  // one-time-reveal banner as account creation.
+  const resetPassword = async (id: string, email: string) => {
+    if (!confirm(`Reset ${email}'s password? Their current password and all active sessions will stop working immediately.`)) return;
+    setResettingId(id);
+    try {
+      const { tempPassword } = await apiPost<{user:any; tempPassword:string}>(`/api/users/${id}/reset-password`, {});
+      setJustCreated({ email, tempPassword, action: "reset" });
+    } catch (err: any) {
+      alert(err.message ?? "Failed to reset password.");
+    } finally {
+      setResettingId(null);
+    }
+  };
 
   const [sources, setSources] = useState<any[]>([]);
   const [sourcesLoading, setSourcesLoading] = useState(true);
@@ -45,22 +107,71 @@ export function AdminScreen() {
         <p className="page-sub">User management, access control, permissions, and system status.</p>
       </div>
 
+      {justCreated && (
+        <div style={{marginBottom:16,padding:"12px 16px",background:"rgba(22,163,74,0.08)",border:"1px solid rgba(22,163,74,0.25)",borderRadius:8,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+          <div style={{fontSize:12,color:"var(--text-2)"}}>
+            {justCreated.action === "reset" ? "Reset password for " : "Created "}<strong>{justCreated.email}</strong> — temporary password: <span className="mono" style={{color:"var(--low-light)"}}>{justCreated.tempPassword}</span>
+            <div style={{fontSize:10.5,color:"var(--text-4)",marginTop:2}}>Shown once — relay it to them securely. It can't be retrieved again after this.</div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={()=>setJustCreated(null)}>Dismiss</button>
+        </div>
+      )}
+
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-        {/* Users — illustrative role roster; no live auth/session backend exists yet */}
+        {/* Users — real roster from /api/users */}
         <div className="card" style={{padding:20}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
             <div style={{fontSize:13,fontWeight:600,color:"var(--text-1)"}}>Users</div>
-            <button className="btn btn-primary btn-sm">+ Add User</button>
+            <button className="btn btn-primary btn-sm" onClick={()=>setShowAddUser(v=>!v)}>+ Add User</button>
           </div>
-          {users.map((u,i)=>(
-            <div key={u.name} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
+
+          {showAddUser && (
+            <div style={{padding:"12px 0",marginBottom:6,borderBottom:"1px solid var(--border)"}}>
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <input className="input" style={{flex:1,padding:"7px 10px",fontSize:12}} placeholder="Full name" value={newName} onChange={e=>setNewName(e.target.value)}/>
+                <input className="input" style={{flex:1,padding:"7px 10px",fontSize:12}} placeholder="Email" value={newEmail} onChange={e=>setNewEmail(e.target.value)}/>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <select className="input" style={{flex:1,padding:"7px 28px 7px 10px",fontSize:12}} value={newRole} onChange={e=>setNewRole(e.target.value)}>
+                  <option value="ADMINISTRATOR">Administrator</option>
+                  <option value="INVESTIGATOR">Investigator</option>
+                  <option value="ANALYST">Analyst</option>
+                </select>
+                <button className="btn btn-primary btn-sm" onClick={submitNewUser} disabled={creating}>{creating ? "Creating…" : "Create"}</button>
+              </div>
+              {createError && <p style={{fontSize:11,color:"var(--high-light)",marginTop:6}}>{createError}</p>}
+            </div>
+          )}
+
+          {usersLoading && <p className="page-sub" style={{fontSize:12}}>Loading users…</p>}
+          {usersError && <p className="page-sub" style={{fontSize:12,color:"var(--high-light)"}}>Couldn't reach the API ({usersError}).</p>}
+          {!usersLoading && !usersError && users.map((u,i)=>(
+            <div key={u.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
               <div style={{width:34,height:34,borderRadius:"50%",background:`hsl(${220+i*44},50%,22%)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:`hsl(${220+i*44},70%,65%)`,flexShrink:0}}>
                 {u.name[0]}
               </div>
-              <div style={{flex:1}}>
+              <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:12.5,color:"var(--text-1)",fontWeight:500}}>{u.name}</div>
-                <div style={{fontSize:10.5,color:"var(--text-4)"}}>{u.role}</div>
+                <div style={{fontSize:10.5,color:"var(--text-4)"}}>{u.email}{u.lockedUntil && new Date(u.lockedUntil).getTime() > Date.now() ? " · locked" : ""}</div>
               </div>
+              <select
+                className="input"
+                style={{padding:"5px 26px 5px 8px",fontSize:11,width:"auto",flexShrink:0}}
+                value={u.role}
+                onChange={e=>changeRole(u.id, e.target.value)}
+              >
+                <option value="ADMINISTRATOR">Administrator</option>
+                <option value="INVESTIGATOR">Investigator</option>
+                <option value="ANALYST">Analyst</option>
+              </select>
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{fontSize:10.5,flexShrink:0}}
+                disabled={resettingId===u.id}
+                onClick={()=>resetPassword(u.id, u.email)}
+              >
+                {resettingId===u.id ? "Resetting…" : "Reset Password"}
+              </button>
             </div>
           ))}
         </div>

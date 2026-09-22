@@ -2,10 +2,15 @@ import "dotenv/config";
 
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import { createServer } from "node:http";
 import { Server } from "socket.io";
 
 import { setIo } from "./sockets/io.js";
+import { requireAuth, requireRole } from "./middleware/auth.js";
+
+import { authRouter } from "./routes/auth.js";
+import { usersRouter } from "./routes/users.js";
 
 import { entitiesRouter } from "./routes/entities.js";
 import { alertsRouter } from "./routes/alerts.js";
@@ -15,8 +20,8 @@ import { graphRouter } from "./routes/graph.js";
 import { reportsRouter } from "./routes/reports.js";
 import { simulateRouter } from "./routes/simulate.js";
 import { ingestRouter } from "./routes/ingest.js";
-import { crawlerRouter } from "./routes/crawler.js";
 import { vendorsRouter } from "./routes/vendors.js";
+import { scrapeRouter } from "./routes/scrape.js";
 
 import { dashboardRouter, analyticsRouter } from "./routes/dashboard.js";
 import { searchRouter } from "./routes/search.js";
@@ -36,8 +41,9 @@ const FRONTEND_URL =
 
 const app = express();
 
-app.use(cors({ origin: FRONTEND_URL }));
+app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 app.use(express.json());
+app.use(cookieParser());
 
 app.get("/api/health", (_req, res) =>
   res.json({
@@ -46,25 +52,37 @@ app.get("/api/health", (_req, res) =>
   })
 );
 
-app.use("/api/entities", entitiesRouter);
-app.use("/api/alerts", alertsRouter);
-app.use("/api/networks", networksRouter);
-app.use("/api/investigations", investigationsRouter);
-app.use("/api/graph", graphRouter);
-app.use("/api/reports", reportsRouter);
-app.use("/api/simulate", simulateRouter);
-app.use("/api/ingest", ingestRouter);
-app.use("/api/crawler", crawlerRouter);
-app.use("/api/evidence", evidenceRouter);
-app.use("/api/wallets", walletsRouter);
-app.use("/api/listings", listingsRouter);
-app.use("/api/vendors", vendorsRouter);
-app.use("/api/audit-log", auditRouter);
-app.use("/api/sources", sourcesRouter);
+// ── Auth (public — these routes enforce their own requirements
+// internally: /login is open, /logout and /me require an existing
+// session via requireAuth applied inside auth.ts) ──────────────────────
+app.use("/api/auth", authRouter);
 
-app.use("/api/dashboard", dashboardRouter);
-app.use("/api/analytics", analyticsRouter);
-app.use("/api/search", searchRouter);
+// ── Ingest keeps its existing shared-secret (x-ingest-key) auth — it's
+// called by a producer script, not a logged-in investigator, so it's
+// intentionally NOT behind requireAuth/session cookies. ─────────────────
+app.use("/api/ingest", ingestRouter);
+
+app.use("/api/evidence", requireAuth, evidenceRouter);
+app.use("/api/wallets", requireAuth, walletsRouter);
+app.use("/api/listings", requireAuth, listingsRouter);
+app.use("/api/vendors", requireAuth, vendorsRouter);
+app.use("/api/audit-log", requireAuth, requireRole("ADMINISTRATOR"), auditRouter);
+app.use("/api/sources", requireAuth, requireRole("ADMINISTRATOR"), sourcesRouter);
+
+app.use("/api/users", requireAuth, requireRole("ADMINISTRATOR"), usersRouter);
+
+app.use("/api/entities", requireAuth, entitiesRouter);
+app.use("/api/alerts", requireAuth, alertsRouter);
+app.use("/api/networks", requireAuth, networksRouter);
+app.use("/api/investigations", requireAuth, investigationsRouter);
+app.use("/api/graph", requireAuth, graphRouter);
+app.use("/api/reports", requireAuth, reportsRouter);
+app.use("/api/simulate", requireAuth, simulateRouter);
+app.use("/api/scrape", requireAuth, scrapeRouter);
+
+app.use("/api/dashboard", requireAuth, dashboardRouter);
+app.use("/api/analytics", requireAuth, analyticsRouter);
+app.use("/api/search", requireAuth, searchRouter);
 
 // Global error handler — without this, an unhandled exception in any route
 // (e.g. a DB outage, a bad Prisma query) crashes out to Express's bare
@@ -92,6 +110,7 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
     origin: FRONTEND_URL,
+    credentials: true,
   },
 });
 

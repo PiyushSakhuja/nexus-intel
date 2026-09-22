@@ -21,6 +21,10 @@ import {
 } from "../lib/audit.js";
 
 import { asyncHandler } from "../lib/asyncHandler.js";
+import { extractTextFromImage } from "../lib/ocr.js";
+import { extractImageMetadata } from "../lib/imageMetadata.js";
+import { analyzeOcrText } from "../lib/ocrSentiment.js";
+import { DEFAULT_MODEL, type SupportedModel } from "../lib/llmClient.js";
 
 export const evidenceRouter = Router();
 
@@ -57,14 +61,25 @@ evidenceRouter.post(
     const {
       type,
       content,
+      // Optional: a base64-encoded image (screenshot, photo). When
+      // present, the hash is computed over the actual decoded image
+      // bytes (chain-of-custody stays about what was really submitted),
+      // and OCR runs against those same bytes to populate ocrText.
+      imageBase64,
+      // Optional free-text context/metadata (was already a column on
+      // EvidenceRecord, previously never read from the request body).
+      notes,
       uploadedBy,
       investigationId,
       sourceId,
     } = req.body;
 
-    if (!content || !String(content).trim()) {
+    const hasContent = content && String(content).trim();
+    const hasImage = imageBase64 && String(imageBase64).trim();
+
+    if (!hasContent && !hasImage) {
       return res.status(400).json({
-        error: "content is required — it's what gets hashed",
+        error: "content or imageBase64 is required — one of them is what gets hashed",
       });
     }
 
@@ -94,26 +109,69 @@ evidenceRouter.post(
       return res.status(404).json({ error: "Investigation not found" });
     }
 
+    let imageBuffer: Buffer | null = null;
+    if (hasImage) {
+      try {
+        // Accept either a raw base64 string or a data: URL
+        // ("data:image/png;base64,...") — strip the prefix if present.
+        const raw = String(imageBase64).replace(/^data:image\/\w+;base64,/, "");
+        imageBuffer = Buffer.from(raw, "base64");
+      } catch {
+        return res.status(400).json({ error: "imageBase64 could not be decoded" });
+      }
+    }
+
     const hash = crypto
       .createHash("sha256")
-      .update(content ?? "")
+      .update(imageBuffer ?? content ?? "")
       .digest("hex")
       .toUpperCase();
 
-    const count = await prisma.evidenceRecord.count();
+    // Best-effort — never blocks evidence creation if OCR fails.
+    const ocrResult = imageBuffer ? await extractTextFromImage(imageBuffer) : null;
+
+    // Best-effort — EXIF/GPS/dimension metadata read off the same decoded
+    // bytes the hash and OCR ran against. Never null-and-throw: a corrupt
+    // or metadata-stripped image just yields a mostly-empty result.
+    const imageMetadata = imageBuffer ? await extractImageMetadata(imageBuffer) : null;
+
+    // Best-effort — suspicion score + sentiment computed from whatever OCR
+    // actually found. Skipped entirely (not run against empty text) when
+    // there's nothing to analyze.
+    const ocrSentiment = ocrResult?.text ? await analyzeOcrText(ocrResult.text) : null;
+
+const existingEvidence = await prisma.evidenceRecord.findMany({
+  select: {
+    displayId: true,
+  },
+});
+
+const maxEvidenceNumber = existingEvidence.reduce((max, evidence) => {
+  const match = /^EV-(\d+)$/.exec(evidence.displayId);
+
+  if (!match) return max;
+
+  return Math.max(max, Number(match[1]));
+}, 999);
+
+const nextEvidenceNumber = maxEvidenceNumber + 1;
 
     let evidence;
 
     try {
       evidence = await prisma.evidenceRecord.create({
         data: {
-          displayId: `EV-${1000 + count}`,
+          displayId: `EV-${nextEvidenceNumber}`,
           type,
           hash,
           uploadedBy,
           status: "PENDING",
           investigationId,
           sourceId,
+          notes: notes ? String(notes).trim() : undefined,
+          ocrText: ocrResult?.text,
+          imageMetadata: imageMetadata ?? undefined,
+          ocrSentiment: ocrSentiment ?? undefined,
         },
       });
     } catch (err) {
@@ -133,6 +191,51 @@ evidenceRouter.post(
     });
 
     res.status(201).json(evidence);
+  })
+);
+
+// POST /api/evidence/:displayId/reanalyze-ocr — recomputes ocrSentiment
+// (suspicion score + AFINN sentiment + LLM explanation) from the
+// EvidenceRecord's already-stored ocrText.
+//
+// This exists because evidence uploaded before ocrSentiment was added
+// only has ocrText, not the analysis derived from it — and because the
+// raw image bytes are never persisted (only their SHA-256 hash), this is
+// the only retroactive path for those older/no-analysis records. It also
+// lets an investigator re-run with a different model (`model` in the
+// body) without re-uploading the image.
+evidenceRouter.post(
+  "/:displayId/reanalyze-ocr",
+  asyncHandler(async (req, res) => {
+    const existing = await prisma.evidenceRecord.findUnique({
+      where: { displayId: req.params.displayId },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Evidence record not found" });
+    }
+    if (!existing.ocrText) {
+      return res.status(400).json({
+        error: "This evidence record has no OCR text to analyze (it was created without an attached image, or OCR found no text).",
+      });
+    }
+
+    const { model } = req.body as { model?: SupportedModel };
+    const ocrSentiment = await analyzeOcrText(existing.ocrText, model ?? DEFAULT_MODEL);
+
+    const evidence = await prisma.evidenceRecord.update({
+      where: { id: existing.id },
+      data: { ocrSentiment },
+    });
+
+    await logAudit({
+      user: existing.uploadedBy || "System",
+      action: `OCR text re-analyzed (suspicion: ${ocrSentiment.suspicionLevel})`,
+      resource: evidence.displayId,
+      type: "write",
+      ip: ipFromRequest(req),
+    });
+
+    res.json(evidence);
   })
 );
 

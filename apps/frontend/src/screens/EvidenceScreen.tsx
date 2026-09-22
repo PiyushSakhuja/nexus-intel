@@ -15,9 +15,27 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [invOptions, setInvOptions] = useState<{ id: string; displayId: string; title: string }[]>([]);
   const [sourceOptions, setSourceOptions] = useState<{ id: string; name: string }[]>([]);
-  const [form, setForm] = useState({ type: "Intelligence Record", content: "", uploadedBy: "Investigator A", investigationId: "", sourceId: "" });
+  const [form, setForm] = useState({ type: "Intelligence Record", content: "", notes: "", uploadedBy: "Investigator A", investigationId: "", sourceId: "" });
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Attachment (evidence image) — read client-side as a data URL, sent as
+  // `imageBase64`. The backend hashes these raw bytes and runs OCR
+  // against them into EvidenceRecord.ocrText.
+  const [attachedImage, setAttachedImage] = useState<{ fileName: string; dataUrl: string } | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setSubmitError("Only image files are supported for now.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setAttachedImage({ fileName: file.name, dataUrl: String(reader.result) });
+    reader.onerror = () => setSubmitError("Couldn't read that file.");
+    reader.readAsDataURL(file);
+  };
 
   const fetchEvidence = () => {
     apiGet<any[]>("/api/evidence")
@@ -31,6 +49,9 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
           hash: ev.hash ?? "—",
           caseRef: ev.investigation?.displayId ?? ev.investigationId ?? ev.caseRef ?? "—",
           notes: ev.notes ?? null,
+          ocrText: ev.ocrText ?? null,
+          imageMetadata: ev.imageMetadata ?? null,
+          ocrSentiment: ev.ocrSentiment ?? null,
           by: ev.uploadedBy ?? ev.by ?? "System",
           status: ev.status ? ev.status.charAt(0) + ev.status.slice(1).toLowerCase() : "Pending",
         }));
@@ -115,6 +136,28 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
     }
   };
 
+  const [reanalyzing, setReanalyzing] = useState(false);
+  const [reanalyzeError, setReanalyzeError] = useState<string | null>(null);
+
+  // Re-runs suspicion score + sentiment against the ocrText already stored
+  // on this record (see routes/misc.ts's POST /:displayId/reanalyze-ocr).
+  // Useful for evidence uploaded before this analysis existed, or to
+  // re-run after tuning the prompt/model.
+  const reanalyzeOcr = async () => {
+    if (!sel) return;
+    setReanalyzing(true);
+    setReanalyzeError(null);
+    try {
+      const updated = await apiPost<any>(`/api/evidence/${encodeURIComponent(sel.id)}/reanalyze-ocr`, {});
+      setSel((s: any) => s ? { ...s, ocrSentiment: updated.ocrSentiment ?? null } : s);
+      fetchEvidence();
+    } catch (err: any) {
+      setReanalyzeError(err.message ?? "Re-analysis failed");
+    } finally {
+      setReanalyzing(false);
+    }
+  };
+
   const openAddModal = () => {
     setSubmitError(null);
     setForm(f => ({ ...f, investigationId: f.investigationId || invOptions[0]?.id || "" }));
@@ -122,14 +165,18 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
   };
 
   const submitEvidence = async () => {
-    if (!form.content.trim()) { setSubmitError("Content is required — it's what gets hashed."); return; }
+    if (!form.content.trim() && !attachedImage) {
+      setSubmitError("Content or an attached image is required — one of them is what gets hashed.");
+      return;
+    }
     if (!form.investigationId) { setSubmitError("Select an investigation to attach this evidence to."); return; }
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await apiPost("/api/evidence", form);
+      await apiPost("/api/evidence", { ...form, imageBase64: attachedImage?.dataUrl });
       setShowAddModal(false);
-      setForm(f => ({ ...f, content: "" }));
+      setForm(f => ({ ...f, content: "", notes: "" }));
+      setAttachedImage(null);
       fetchEvidence(); // refresh the table with the new row
     } catch (err: any) {
       setSubmitError(err.message ?? "Failed to submit evidence");
@@ -220,6 +267,304 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
                 <div style={{ fontSize: 12, color: "var(--text-2)", whiteSpace: "pre-wrap" }}>{sel.notes}</div>
               </div>
             )}
+
+            {sel.ocrText && (
+              <div style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                <div style={{ fontSize: 10, color: "var(--text-4)", marginBottom: 4 }}>Extracted Text (OCR)</div>
+                <div style={{ fontSize: 12, color: "var(--text-2)", whiteSpace: "pre-wrap" }}>{sel.ocrText}</div>
+              </div>
+            )}
+
+            {sel.imageMetadata && (
+              <div style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                <div style={{ fontSize: 10, color: "var(--text-4)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.07em" }}>Image Metadata</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 10px" }}>
+                  {sel.imageMetadata.width && sel.imageMetadata.height && (
+                    <MetaRow label="Dimensions" value={`${sel.imageMetadata.width} × ${sel.imageMetadata.height}px`} />
+                  )}
+                  {sel.imageMetadata.format && <MetaRow label="Format" value={String(sel.imageMetadata.format).toUpperCase()} />}
+                  {typeof sel.imageMetadata.sizeBytes === "number" && (
+                    <MetaRow label="File Size" value={formatBytes(sel.imageMetadata.sizeBytes)} />
+                  )}
+                  {sel.imageMetadata.make && <MetaRow label="Camera Make" value={sel.imageMetadata.make} />}
+                  {sel.imageMetadata.model && <MetaRow label="Camera Model" value={sel.imageMetadata.model} />}
+                  {sel.imageMetadata.software && <MetaRow label="Software" value={sel.imageMetadata.software} />}
+                  {sel.imageMetadata.dateTimeOriginal && (
+                    <MetaRow label="Captured" value={new Date(sel.imageMetadata.dateTimeOriginal).toLocaleString()} />
+                  )}
+                </div>
+                {sel.imageMetadata.gps ? (
+                  <div style={{ marginTop: 8, padding: "6px 10px", background: "rgba(220,38,38,0.08)", border: "1px solid rgba(220,38,38,0.2)", borderRadius: 6 }}>
+                    <div style={{ fontSize: 10.5, color: "var(--critical-light)", fontWeight: 600, marginBottom: 2 }}>⚠ GPS Coordinates Embedded</div>
+                    <div className="mono-sm" style={{ fontSize: 11.5, color: "var(--text-2)" }}>
+                      {sel.imageMetadata.gps.latitude.toFixed(5)}, {sel.imageMetadata.gps.longitude.toFixed(5)}
+                    </div>
+                    <a
+                      href={`https://www.openstreetmap.org/?mlat=${sel.imageMetadata.gps.latitude}&mlon=${sel.imageMetadata.gps.longitude}#map=15/${sel.imageMetadata.gps.latitude}/${sel.imageMetadata.gps.longitude}`}
+                      target="_blank" rel="noreferrer"
+                      style={{ fontSize: 10.5, color: "var(--accent-hi)" }}
+                    >
+                      View on map ↗
+                    </a>
+                  </div>
+                ) : !sel.imageMetadata.hasExif ? (
+                  <div style={{ marginTop: 8, fontSize: 10.5, color: "var(--text-4)" }}>No EXIF metadata found in this image (likely stripped or re-encoded).</div>
+                ) : null}
+              </div>
+            )}
+
+            {sel.ocrSentiment && (
+              <div style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div style={{ fontSize: 10, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: "0.07em" }}>OCR Text Analysis</div>
+                  <span className={`badge ${
+                    sel.ocrSentiment.suspicionLevel === "CRITICAL" ? "badge-critical" :
+                    sel.ocrSentiment.suspicionLevel === "HIGH" ? "badge-high" :
+                    sel.ocrSentiment.suspicionLevel === "MEDIUM" ? "badge-medium" : "badge-low"
+                  }`} style={{ fontSize: 10 }}>
+                    {sel.ocrSentiment.suspicious ? "⚠ " : ""}{sel.ocrSentiment.suspicionLevel} · {sel.ocrSentiment.suspicionScore}/100
+                  </span>
+                </div>
+
+                {sel.ocrSentiment.signals?.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+                    {sel.ocrSentiment.signals.map((s: any, i: number) => (
+                      <span key={i} className="mono-sm" style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "rgba(217,119,6,0.08)", border: "1px solid rgba(217,119,6,0.2)", color: "var(--medium-light)" }}>
+                        {s.label} (+{s.value})
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+{sel.ocrSentiment.sentiment && (
+  <div
+    style={{
+      marginTop: 10,
+      padding: 12,
+      border: "1px solid var(--border)",
+      borderRadius: 8,
+      background: "rgba(255,255,255,0.015)",
+    }}
+  >
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: 8,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          color: "var(--text-4)",
+          textTransform: "uppercase",
+          letterSpacing: "0.07em",
+        }}
+      >
+        AI Sentiment Analysis
+      </div>
+
+      <span
+        style={{
+          fontSize: 9,
+          padding: "3px 6px",
+          borderRadius: 4,
+          background:
+            sel.ocrSentiment.sentiment.source === "llm"
+              ? "rgba(99,102,241,0.12)"
+              : "rgba(217,119,6,0.12)",
+          color:
+            sel.ocrSentiment.sentiment.source === "llm"
+              ? "var(--accent-hi)"
+              : "var(--medium-light)",
+          border:
+            sel.ocrSentiment.sentiment.source === "llm"
+              ? "1px solid rgba(99,102,241,0.2)"
+              : "1px solid rgba(217,119,6,0.2)",
+        }}
+      >
+        {sel.ocrSentiment.sentiment.source === "llm"
+          ? "LLM ANALYZED"
+          : "FALLBACK"}
+      </span>
+    </div>
+
+    {/* Sentiment + confidence */}
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        marginBottom: 9,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 20,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          color:
+            sel.ocrSentiment.sentiment.label === "negative"
+              ? "var(--high-light)"
+              : sel.ocrSentiment.sentiment.label === "positive"
+                ? "var(--low-light)"
+                : "var(--text-2)",
+        }}
+      >
+        {sel.ocrSentiment.sentiment.label}
+      </div>
+
+      <div
+        style={{
+          fontSize: 11,
+          color: "var(--text-4)",
+        }}
+      >
+        {Math.round(
+          Number(sel.ocrSentiment.sentiment.confidence ?? 0) * 100
+        )}
+        % confidence
+      </div>
+    </div>
+
+    {/* Confidence bar */}
+    <div
+      style={{
+        height: 5,
+        background: "rgba(255,255,255,0.07)",
+        borderRadius: 4,
+        overflow: "hidden",
+        marginBottom: 10,
+      }}
+    >
+      <div
+        style={{
+          height: "100%",
+          width: `${Math.max(
+            0,
+            Math.min(
+              100,
+              Number(
+                sel.ocrSentiment.sentiment.confidence ?? 0
+              ) * 100
+            )
+          )}%`,
+          background:
+            sel.ocrSentiment.sentiment.label === "negative"
+              ? "var(--high-light)"
+              : sel.ocrSentiment.sentiment.label === "positive"
+                ? "var(--low-light)"
+                : "var(--text-3)",
+          borderRadius: 4,
+          transition: "width 0.3s ease",
+        }}
+      />
+    </div>
+
+    {/* Emotions */}
+    {Array.isArray(sel.ocrSentiment.sentiment.emotions) &&
+      sel.ocrSentiment.sentiment.emotions.length > 0 && (
+        <div style={{ marginBottom: 9 }}>
+          <div
+            style={{
+              fontSize: 10,
+              color: "var(--text-4)",
+              marginBottom: 5,
+            }}
+          >
+            Emotional Signals
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 5,
+            }}
+          >
+            {sel.ocrSentiment.sentiment.emotions.map(
+              (emotion: string, i: number) => (
+                <span
+                  key={`${emotion}-${i}`}
+                  className="mono-sm"
+                  style={{
+                    fontSize: 10,
+                    padding: "3px 7px",
+                    borderRadius: 4,
+                    background: "rgba(99,102,241,0.08)",
+                    border:
+                      "1px solid rgba(99,102,241,0.18)",
+                    color: "var(--accent-hi)",
+                    textTransform: "capitalize",
+                  }}
+                >
+                  {emotion}
+                </span>
+              )
+            )}
+          </div>
+        </div>
+      )}
+
+    {/* LLM reasoning */}
+    {sel.ocrSentiment.sentiment.reasoning && (
+      <div style={{ marginBottom: 8 }}>
+        <div
+          style={{
+            fontSize: 10,
+            color: "var(--text-4)",
+            marginBottom: 4,
+          }}
+        >
+          Sentiment Reasoning
+        </div>
+
+        <div
+          style={{
+            fontSize: 11.5,
+            color: "var(--text-2)",
+            lineHeight: 1.5,
+          }}
+        >
+          {sel.ocrSentiment.sentiment.reasoning}
+        </div>
+      </div>
+    )}
+
+    <div
+      style={{
+        fontSize: 9.5,
+        color: "var(--text-4)",
+        marginTop: 7,
+      }}
+    >
+      {sel.ocrSentiment.sentiment.source === "llm"
+        ? `Analyzed by ${sel.ocrSentiment.sentiment.modelUsed}`
+        : "LLM unavailable — sentiment was not reliably classified"}
+    </div>
+  </div>
+)}
+
+                {sel.ocrSentiment.explanation && (
+                  <div style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.5 }}>{sel.ocrSentiment.explanation}</div>
+                )}
+
+                <div style={{ fontSize: 10, color: "var(--text-4)", marginTop: 6 }}>
+                  {sel.ocrSentiment.aiGenerated ? `AI explanation by ${sel.ocrSentiment.modelUsed}` : "Fallback explanation — LLM unavailable"}
+                </div>
+              </div>
+            )}
+
+            {sel.ocrText && (
+              <div style={{ padding: "8px 0" }}>
+                <button className="btn btn-ghost btn-sm" disabled={reanalyzing} onClick={reanalyzeOcr} style={{ fontSize: 11 }}>
+                  {reanalyzing ? "Analyzing…" : "↻ Re-run Sentiment / Suspicion Analysis"}
+                </button>
+                {reanalyzeError && <div style={{ fontSize: 11, color: "var(--critical-light)", marginTop: 6 }}>{reanalyzeError}</div>}
+              </div>
+            )}
+
 
             <div style={{ marginTop: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -332,25 +677,49 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
               />
             </div>
 
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", fontSize: 10, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 5 }}>Notes (context, not hashed)</label>
+              <textarea
+                className="input"
+                style={{ minHeight: 50, resize: "vertical", fontSize: 12.5 }}
+                placeholder="Optional context for the investigator reviewing this record…"
+                value={form.notes}
+                onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+              />
+            </div>
+
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: "block", fontSize: 10, color: "var(--text-4)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 5 }}>Attachments</label>
-              <div
-                style={{
-                  border: "1px dashed var(--border-2, rgba(255,255,255,0.15))",
-                  borderRadius: 8,
-                  padding: "14px 12px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 8,
-                  fontSize: 11.5,
-                  color: "var(--text-4)",
-                }}
-              >
-                <span>📎 Add photos or documents</span>
-              </div>
+              {attachedImage ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
+                  <img src={attachedImage.dataUrl} alt="" style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 5, flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 11.5, color: "var(--text-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{attachedImage.fileName}</div>
+                    <div style={{ fontSize: 10, color: "var(--text-4)" }}>Text will be extracted (OCR) on submit</div>
+                  </div>
+                  <button type="button" onClick={() => setAttachedImage(null)} style={{ background: "none", border: "none", color: "var(--text-4)", cursor: "pointer", fontSize: 16, flexShrink: 0 }}>×</button>
+                </div>
+              ) : (
+                <label
+                  style={{
+                    border: "1px dashed var(--border-2, rgba(255,255,255,0.15))",
+                    borderRadius: 8,
+                    padding: "14px 12px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8,
+                    fontSize: 11.5,
+                    color: "var(--text-4)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <span>📎 Add a photo</span>
+                  <input type="file" accept="image/*" onChange={handleFileChange} style={{ display: "none" }} />
+                </label>
+              )}
               <div style={{ fontSize: 10, color: "var(--text-4)", marginTop: 5 }}>
-                File attachments coming soon — not yet wired up.
+                One image per record for now. It's hashed as submitted, and any text in it is extracted automatically.
               </div>
             </div>
 
@@ -371,4 +740,19 @@ export function EvidenceScreen({ selectedId }: { selectedId?: string | null }) {
       )}
     </div>
   );
+}
+
+function MetaRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+      <span style={{ fontSize: 9.5, color: "var(--text-4)" }}>{label}</span>
+      <span style={{ fontSize: 11.5, color: "var(--text-2)" }}>{value}</span>
+    </div>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }

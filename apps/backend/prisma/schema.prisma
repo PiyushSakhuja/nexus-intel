@@ -279,26 +279,27 @@ enum EvidenceStatus {
 
 model EvidenceRecord {
   id              String         @id @default(cuid())
-  displayId       String         @unique // "EV-1029"
+  displayId       String         @unique
   type            String
-  notes           String?        // investigator-entered context/source description
-  hash            String         // SHA-256, actually computed
+  notes           String?
+  hash            String
   uploadedBy      String
   status          EvidenceStatus @default(PENDING)
   createdAt       DateTime       @default(now())
+  ocrText         String?        @db.Text
+  // EXIF/GPS/dimension metadata extracted from the uploaded image (see
+  // lib/imageMetadata.ts). Null for text-only evidence or images with
+  // no readable metadata. Stored as JSON rather than flattened columns
+  // since tag presence varies wildly per image (most have no EXIF at all).
+  imageMetadata   Json?
+  // Suspicion score + sentiment computed from `ocrText` (see
+  // lib/ocrSentiment.ts). Null until ocrText exists and analysis has run.
+  ocrSentiment    Json?
 
   sourceId        String?
   source          Source?        @relation(fields: [sourceId], references: [id])
-
-  // The investigation this record was originally created under (only ever
-  // set once, from the Evidence Repository's creation flow — see
-  // routes/misc.ts's POST /api/evidence). This is NOT the set of
-  // investigations the record is attached to; for that, see
-  // InvestigationEvidence below. Kept required/non-null so existing rows
-  // and the Repository's creation flow are untouched by this change.
   investigationId String
   investigation   Investigation  @relation(fields: [investigationId], references: [id], onDelete: Cascade)
-
   investigationLinks InvestigationEvidence[]
 }
 
@@ -435,6 +436,40 @@ model User {
   email     String   @unique
   role      Role     @default(INVESTIGATOR)
   createdAt DateTime @default(now())
+
+  // ── Auth ────────────────────────────────────────────────────────────────
+  // Argon2id hash (see src/lib/auth.ts) — never the plaintext password.
+  passwordHash String?
+
+  // Basic brute-force protection: incremented on each failed login,
+  // reset on success. When failedLoginAttempts crosses a threshold,
+  // lockedUntil is set and login is refused (even with the right
+  // password) until that time passes — see src/routes/auth.ts.
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+
+  sessions  Session[]
+}
+
+// A server-side session — the source of truth for "is this user actually
+// logged in right now". Only tokenHash is stored (SHA-256 of the random
+// token that's actually set in the user's cookie); the raw token never
+// touches the database, so a DB leak alone can't be replayed as a valid
+// session. expiresAt is the absolute lifetime cap; lastActiveAt is bumped
+// on each authenticated request and used for the shorter idle timeout —
+// see src/middleware/auth.ts.
+model Session {
+  id           String   @id @default(cuid())
+  tokenHash    String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  lastActiveAt DateTime @default(now())
+  expiresAt    DateTime
+  ip           String?
+  userAgent    String?
+
+  @@index([userId])
 }
 
 enum TxnDirection {
@@ -459,55 +494,4 @@ model WalletTransaction {
   createdAt   DateTime     @default(now())
 }
 
-// ─── Open-web crawler intake ────────────────────────────────────────────────
-// A separate evidence lane from Listing (which is dark-web marketplace data
-// imported from the Hansa/Valhalla CSVs — see prisma/importDatadump.ts).
-// CrawledPage/CrawledImage hold pages an operator explicitly submitted for
-// crawling (see lib/webCrawler.ts) — never auto-discovered, never anything
-// requiring bypassing access controls. Kept structurally separate from
-// Listing/Entity so this lower-confidence, unverified evidence can never
-// silently feed into vendor/entity/network risk math without an explicit,
-// visible correlation step (not built here — see chat notes).
 
-model CrawledSource {
-  id              String        @id @default(cuid())
-  url             String        @unique // the seed URL an operator submitted
-  domain          String
-  allowedByRobots Boolean       @default(true)
-  lastCrawledAt   DateTime?
-  createdAt       DateTime      @default(now())
-  pages           CrawledPage[]
-}
-
-model CrawledPage {
-  id              String         @id @default(cuid())
-  sourceId        String
-  source          CrawledSource  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  url             String         @unique
-  title           String?        @db.Text
-  textExcerpt     String?        @db.Text // first ~2000 chars of extracted body text, for display/audit — not the full page
-  wordCount       Int            @default(0)
-  suspicionScore  Int            @default(0) // 0-100, from lib/textSuspicionEngine.ts — keyword/pattern signals, NOT sentiment
-  signals         Json           // string[] of matched signal labels, same "(+N)" display convention as Listing.signals
-  status          String         // "Flagged" | "Under Review" | "Monitoring" | "Clear" — same convention as Listing.status
-  fetchedAt       DateTime       @default(now())
-  images          CrawledImage[]
-}
-
-model CrawledImage {
-  id                String      @id @default(cuid())
-  pageId            String
-  page              CrawledPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
-  imageUrl          String
-  width             Int?
-  height            Int?
-  cameraMake        String?
-  cameraModel       String?
-  software          String?     // EXIF "Software" tag — e.g. an editor name, sometimes a watermark-removal tool
-  gpsLat            Float?
-  gpsLon            Float?
-  capturedAt        DateTime?   // EXIF DateTimeOriginal, if present
-  metadataStripped  Boolean     @default(false) // true when the image has no EXIF at all — itself a signal, not neutral
-  suspicionFlags    Json        // string[] — e.g. "metadata_stripped", "editing_software_detected", "gps_present"
-  createdAt         DateTime    @default(now())
-}
